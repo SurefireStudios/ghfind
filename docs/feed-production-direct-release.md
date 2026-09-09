@@ -19,7 +19,11 @@ After exact main CI, the Production environment workflow verifies the same CI
 receipts and actual repository protection. The workflow then:
 
 1. Builds Web with a public-only environment; no dotenv/runtime credentials.
-   Builds the portable amd64 Go image and pushes it to obtain its immutable digest.
+   Generates a fresh 256-bit build ID and compiles it into both amd64 Go
+   entrypoints. Runs each entrypoint's `--build-info` with networking disabled,
+   then binds both actual binary identities to the pushed immutable digest and
+   exact Actions run/attempt in `image-build.json`. Off and baseline reuse that
+   one build; a same-SHA binary from an earlier build is rejected.
 2. Reads the pinned production D1 databases; creates only the separately named
    production archive bucket and three bounded queues if absent. No production
    database is created, copied, promoted or deleted.
@@ -42,8 +46,9 @@ receipts and actual repository protection. The workflow then:
    remain pending; acceptance always requires the expected new image. Once the
    new image appears its version is pinned, and identity drift or regression stops
    the release. Snapshots never authorize serving traffic from an old image.
-   Initial readiness may wait only for an explicit dependency-not-ready response
-   after all returned Go identities have been validated. Unknown errors and
+   Initial readiness may wait for a native, fixed-actor cold-preparation result,
+   or an explicit dependency-not-ready response after every returned Go identity
+   has been validated. Native preparation is never accepted as ready. Unknown errors and
    identity mismatches stop immediately; all later heartbeat checks stay strict.
 5. Publishes a 100% Go-only **paused** Web and enables source outbox. New assessment
    intent is persisted in the source database even while delivery is paused.
@@ -73,8 +78,13 @@ the existing Go gateway has been paused (or while the first-release Web still
 uses legacy Feed). This requests one 100% Container replacement step instead of
 the platform default gradual steps for a two-instance application. It does not
 make rollout transactional or prove instances finished replacing. The actual
-image, application/instance version, running state and fresh authenticated
-readiness checks still gate admission. See [Cloudflare rollout semantics](https://developers.cloudflare.com/containers/configuration/rollouts/).
+image and direct application version still gate admission. Each fixed Durable
+Object captures its own actor ID and native `ctx.container.running` after the
+real Go readiness response, and the Worker compares the actor with
+`namespace.idFromName(target)`. Go's compiled build ID must match this release's
+image receipt. No dashboard instance state/version gates admission or is
+presented as a physical placement attestation. This is a trusted build-chain
+identity check, not hardware remote attestation. See [Cloudflare rollout semantics](https://developers.cloudflare.com/containers/configuration/rollouts/).
 
 ## Compatibility and containment
 
@@ -89,9 +99,12 @@ Feed availability recovery or a <=5-minute recovery acceptance. After a compatib
 Go release has itself passed live validation, preserve its immutable image and
 Worker manifest as a service-recovery anchor. Never reverse destructive schema.
 
-If deployment fails before Web cutover, do not declare success. If cutover or
-public smoke fails after the paused anchor is captured, the workflow restores
-that anchor and reads it back. A retry cannot return to a legacy writer. Failed
+If deployment fails before Web cutover, do not declare success. An admission intent is recorded before the all-mode deployment. If admission
+started and public smoke did not succeed (including cancellation), an `always()`
+step restores the verified paused anchor and reads it back. Complete runner loss
+or forced termination can prevent any cleanup step: use the protected pause
+workflow with the recorded anchor; do not claim cancellation handling makes
+Cloudflare deployment transactional. A retry cannot return to a legacy writer. Failed
 runs and actual state receipts are retained for 30 days, without secret values.
 
 ## Production catalog and real provider
@@ -113,16 +126,26 @@ An uncertain POST is reconciled against the source database, never blindly sent
 again. A missing prior receipt after a possible POST fails closed. Future releases
 may reuse a genuinely eligible existing projection, explicitly reporting reuse.
 
-After source completion, at most five projection observations run 35 seconds
-apart within a 180-second hard deadline. This includes a full minute source-relay
-cycle and executor time; it is a release observation bound, not evidence that
-projection latency meets the 60-second operational target. Each CF request is
-also bounded by the remaining window and 15 seconds, with at most 22 management
-reads per invocation. Once actual completion is persisted, rerunning the same
-intent uses only current Web identity, source and projection reads. It performs
-no public assessment GET or POST, consumes at most one terminal revalidation per
-invocation and two cumulatively, and keeps prior polling counters and timestamps.
-Changed identities, withdrawn eligibility and missing finalization still fail.
+After real provider completion, first-time Cron propagation has a separate
+bootstrap window. Cloudflare documents up to 15 minutes for trigger changes.
+Only a pending/leased source outbox can use six persisted bootstrap slots at
+0/180/360/540/720/900 seconds; the final slot permits bounded response time.
+A matching dead-letter execution fails immediately. Source delivery starts the
+ordinary projection window: at most five observations 35 seconds apart, with a
+180-second hard deadline. An older coherent projection can remain pending;
+identity corruption, future versions and terminal failures cannot. These release
+observations do not prove the normal 60-second projection SLO.
+
+The provider retains its 60 public-read/900-second allowance. Wait has a shared
+1980-second ceiling and at most 25 management reads; resume preserves clocks and
+counters. Completed-intent revalidation still performs no public assessment GET
+or POST and permits one check per invocation/two cumulatively. Runtime readback
+retains 180 seconds, 52 metadata reads and 95 aggregate readiness requests per
+phase (each aggregate can issue three Go probes: at most 285, not 95). Native
+proof removes dashboard polling; the maximum planned metadata series is 35.
+
+See [Cron propagation](https://developers.cloudflare.com/workers/configuration/cron-triggers/#2-update-configuration)
+and [native container state](https://developers.cloudflare.com/durable-objects/api/container/#running).
 
 A new published Mosoo project agent `01M22PWZR0A7ZYCDKWTEA0YEHQ` was provisioned
 using the owner's StepFun credentials. Initially named `ghfind-feed-staging`, it
