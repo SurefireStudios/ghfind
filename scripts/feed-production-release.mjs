@@ -153,6 +153,14 @@ export async function verifyWeb(sha, mode, provider, api=cf) {
     requireThat(binding?.type==='d1' && binding.id===d.database_id,'Web D1 mismatch');
     verified.push({name:d.binding,type:'d1',id:d.database_id});
   }
+  for(const bucket of expected.r2_buckets) {
+    const binding=byName.get(bucket.binding);
+    requireThat(binding?.type==='r2_bucket' && binding.bucket_name===bucket.bucket_name,'Web cache bucket mismatch');
+    verified.push({name:bucket.binding,type:'r2_bucket',bucket_name:bucket.bucket_name});
+  }
+  const assets=byName.get(expected.assets.binding);
+  requireThat(assets?.type==='assets','Web assets binding mismatch');
+  verified.push({name:expected.assets.binding,type:'assets'});
   const runtime=byName.get('FEED_RUNTIME');
   // Actual production binding readbacks omit environment for the default service.
   // Explicit production is equivalent; a staging environment or custom entrypoint is not.
@@ -160,7 +168,9 @@ export async function verifyWeb(sha, mode, provider, api=cf) {
     (runtime.environment===undefined || runtime.environment==='production') &&
     (runtime.entrypoint===undefined || runtime.entrypoint==='default'),'Web runtime binding mismatch');
   verified.push({name:'FEED_RUNTIME',type:'service',service:production.runtimeWorker,environment:runtime.environment??'production',entrypoint:runtime.entrypoint??'default'});
-  for(const name of expected.secrets.required) {
+  // These OAuth secrets are preserved in Cloudflare, not copied into CI.
+  // Inventory proves configuration presence; the holder browser proves login.
+  for(const name of [...expected.secrets.required,'AUTH_GITHUB_ID','AUTH_GITHUB_SECRET','AUTH_SECRET']) {
     requireThat(byName.get(name)?.type==='secret_text',`Web credential absent: ${name}`);
     verified.push({name,type:'secret_text'});
   }

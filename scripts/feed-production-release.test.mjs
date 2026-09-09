@@ -36,7 +36,7 @@ test('runtime credentials are distinct and never enter the Web build environment
 });
 function webFixture() {
  const c=renderWeb(sha,'all',provider);
- const bindings=[...Object.entries(c.vars).map(([name,text])=>({name,type:'plain_text',text})),...c.d1_databases.map(b=>({name:b.binding,type:'d1',id:b.database_id})),{name:'FEED_RUNTIME',type:'service',service:c.services[0].service},...c.secrets.required.map(name=>({name,type:'secret_text'}))];
+ const bindings=[{name:c.assets.binding,type:'assets'},...c.r2_buckets.map(b=>({name:b.binding,type:'r2_bucket',bucket_name:b.bucket_name})),...Object.entries(c.vars).map(([name,text])=>({name,type:'plain_text',text})),...c.d1_databases.map(b=>({name:b.binding,type:'d1',id:b.database_id})),{name:'FEED_RUNTIME',type:'service',service:c.services[0].service},...[...c.secrets.required,'AUTH_GITHUB_ID','AUTH_GITHUB_SECRET','AUTH_SECRET'].map(name=>({name,type:'secret_text'}))];
  const versionId='11111111-1111-4111-8111-111111111111',deploymentId='22222222-2222-4222-8222-222222222222';
  const version={id:versionId,annotations:{'workers/tag':`production-${sha}`},resources:{bindings}};
  const deployment={deployments:[{id:deploymentId,versions:[{percentage:100,version_id:versionId}]}]};
@@ -68,6 +68,15 @@ test('Web version response, source tag, binding names/types and production servi
   ...['Admin','',null].map(entrypoint=>f=>{f.bindings.find(b=>b.name==='FEED_RUNTIME').entrypoint=entrypoint;}),
   f=>{f.bindings.find(b=>b.name==='FEED_RUNTIME').type='plain_text';},
   f=>{f.bindings.find(b=>b.name==='GHFIND_FEED_D1').id='33333333-3333-4333-8333-333333333333';},
+  f=>{f.bindings.find(b=>b.name==='NEXT_INC_CACHE_R2_BUCKET').bucket_name='wrong-isolated-cache';},
+  f=>{f.bindings.find(b=>b.name==='NEXT_INC_CACHE_R2_BUCKET').type='plain_text';},
+  f=>{f.version.resources.bindings=f.bindings.filter(b=>b.name!=='NEXT_INC_CACHE_R2_BUCKET');},
+  f=>{f.bindings.find(b=>b.name==='ASSETS').type='plain_text';},
+  f=>{f.version.resources.bindings=f.bindings.filter(b=>b.name!=='ASSETS');},
+  ...['AUTH_GITHUB_ID','AUTH_GITHUB_SECRET','AUTH_SECRET'].flatMap(name=>[
+    f=>{f.version.resources.bindings=f.bindings.filter(b=>b.name!==name);},
+    f=>{f.bindings.find(b=>b.name===name).type='plain_text';},
+  ]),
   f=>{f.bindings.find(b=>b.name==='MOSOO_API_TOKEN').type='plain_text';},
   f=>{f.bindings.find(b=>b.name==='FEED_SOURCE_OUTBOX_ENABLED').text='false';},
  ];
