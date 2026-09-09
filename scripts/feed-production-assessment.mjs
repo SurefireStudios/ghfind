@@ -18,12 +18,19 @@ export const LIMITS = Object.freeze({
   publicPolls: 60,
   pollIntervalMs: 15000,
   publicWaitMs: 900000,
+  relayBootstrapPolls: 6,
+  relayBootstrapIntervalMs: 180000,
+  relayBootstrapWaitMs: 900000,
+  relayBootstrapReadMs: 15000,
+  waitMs: 1980000,
   projectionPolls: 5,
   projectionIntervalMs: 35000,
   projectionWaitMs: 180000,
   terminalRevalidations: 2,
   terminalWaitMs: 60000,
-  management: 22,
+  // Per invocation: Web 2 + initial source 1 + bootstrap 6×2 + projection 5×2.
+  // Terminal revalidation remains Web 2 + source/projection 2, at most twice.
+  management: 25,
 });
 const check = (v, code) => {
   if (!v) throw new Error(code);
@@ -52,6 +59,7 @@ export const SQL = Object.freeze({
   candidate: `SELECT p.repo_key,p.analysis_id,p.source_hash FROM feed_projects p WHERE p.published=1 AND (? IS NULL OR p.repo_key=?) AND (EXISTS(SELECT 1 FROM feed_submission_provenance v WHERE v.repo_key=p.repo_key AND v.analysis_id=p.analysis_id AND v.revoked_at IS NULL) OR EXISTS(SELECT 1 FROM feed_project_source_versions v WHERE v.repo_key=p.repo_key AND v.analysis_id=p.analysis_id AND v.revoked_at IS NULL AND v.blocked_reason='')) AND NOT EXISTS(SELECT 1 FROM feed_project_moderation m WHERE m.repo_key=p.repo_key AND m.removed=1) ORDER BY p.repo_key LIMIT 1`,
   runs: `SELECT id,repo_key,requested_ref,status,idempotency_key,schema_version,rubric_version,agent_version,skill_version,created_at,create_attempts FROM project_analysis_runs WHERE repo_key=? AND requested_ref=? ORDER BY created_at LIMIT 2`,
   source: `SELECT pr.id,pr.repo_key,pr.requested_ref,pr.resolved_commit_sha,pr.status,pr.schema_version,pr.rubric_version,pr.agent_version,pr.skill_version,pr.idempotency_key,pr.create_attempts,pr.created_at,pr.completed_at,pr.mosoo_agent_id,pr.mosoo_thread_id,pr.mosoo_run_id,pr.analysis_sha256,pr.report_sha256,pr.evidence_sha256,pa.latest_analysis_id,pa.resolved_commit_sha AS current_commit_sha,sr.id AS receipt_id,sr.requested_repo_key,sr.source_kind,o.sequence,o.event_id,o.aggregate_key,o.source_hash,o.contract_version,o.status AS outbox_status FROM project_analysis_runs pr JOIN project_assessments pa ON pa.latest_analysis_id=pr.id JOIN feed_submission_receipts sr ON sr.analysis_id=pr.id JOIN feed_source_outbox o ON o.analysis_id=pr.id AND o.receipt_id=sr.id WHERE pr.id=? AND pr.repo_key=? LIMIT 2`,
+  execution: `SELECT event_id,aggregate_key,source_version,status,json_extract(envelope_json,'$.analysisId') AS analysis_id,json_extract(envelope_json,'$.receiptId') AS receipt_id,json_extract(envelope_json,'$.sourceHash') AS source_hash,json_extract(envelope_json,'$.sourceVersion') AS event_source_version,json_extract(envelope_json,'$.eventId') AS envelope_event_id,json_extract(envelope_json,'$.contractVersion') AS contract_version,json_extract(envelope_json,'$.kind') AS event_kind FROM feed_execution_jobs WHERE event_id=? LIMIT 2`,
   projection: `SELECT p.analysis_id,p.source_hash,p.published,v.analysis_id AS version_analysis_id,v.event_id,v.source_version,v.receipt_id,v.source_hash AS version_source_hash,v.resolved_commit_sha,v.source_kind,v.revoked_at,v.blocked_reason,j.status AS job_status,j.aggregate_key AS job_repo,j.source_version AS job_source_version,json_extract(j.envelope_json,'$.analysisId') AS event_analysis_id,json_extract(j.envelope_json,'$.receiptId') AS event_receipt_id,json_extract(j.envelope_json,'$.sourceHash') AS event_source_hash,json_extract(j.envelope_json,'$.sourceVersion') AS event_source_version,json_extract(j.envelope_json,'$.eventId') AS job_event_id,json_extract(j.envelope_json,'$.contractVersion') AS event_contract_version,COALESCE(m.removed,0) AS removed FROM feed_projects p JOIN feed_project_source_versions v ON v.repo_key=p.repo_key JOIN feed_execution_jobs j ON j.event_id=v.event_id LEFT JOIN feed_project_moderation m ON m.repo_key=p.repo_key WHERE p.repo_key=? LIMIT 2`,
 });
 export function safeError(e) {
@@ -101,6 +109,30 @@ function validateReceipt(r, sha = r?.sourceSha) {
     "invalid_assessment_receipt",
   );
   if (r.analysisId !== null) check(id(r.analysisId), "invalid_analysis_id");
+  check(
+    (r.waitStartedAt === undefined ||
+      (Number.isSafeInteger(r.waitStartedAt) && r.waitStartedAt > 0)) &&
+      (r.relayBootstrapStartedAt === undefined ||
+        (Number.isSafeInteger(r.relayBootstrapStartedAt) &&
+          r.relayBootstrapStartedAt > 0 &&
+          r.completionObservedAt !== undefined)) &&
+      (r.relayBootstrapPolls === undefined ||
+        (Number.isSafeInteger(r.relayBootstrapPolls) &&
+          r.relayBootstrapPolls >= 0 &&
+          r.relayBootstrapPolls <= LIMITS.relayBootstrapPolls)) &&
+      ((r.relayBootstrapPolls ?? 0) === 0 ||
+        r.relayBootstrapStartedAt !== undefined) &&
+      (r.relayDeliveredObservedAt === undefined ||
+        (Number.isSafeInteger(r.relayDeliveredObservedAt) &&
+          r.relayDeliveredObservedAt > 0)) &&
+      (r.relayBootstrapStartedAt === undefined ||
+        (id(r.relayBootstrapSource?.eventId) &&
+          id(r.relayBootstrapSource?.receiptId) &&
+          Number.isSafeInteger(r.relayBootstrapSource?.sourceVersion) &&
+          r.relayBootstrapSource.sourceVersion > 0 &&
+          hash(r.relayBootstrapSource?.sourceHash))),
+    "invalid_assessment_receipt",
+  );
   check(
     (r.projectionStartedAt === undefined ||
       (Number.isSafeInteger(r.projectionStartedAt) &&
@@ -236,7 +268,9 @@ function context(
     return data.result;
   }
   async function query(kind, params, requestDeadline = deadline) {
-    const db = ["candidate", "projection"].includes(kind) ? FEED : CORE;
+    const db = ["candidate", "projection", "execution"].includes(kind)
+      ? FEED
+      : CORE;
     check(Object.hasOwn(SQL, kind), "unknown_read_query");
     const rows = await cf(
       `/d1/database/${db}/query`,
@@ -537,8 +571,69 @@ export function sourceIdentity(row, sha, analysisId, agentId) {
     priorThreadIdentitiesAvailable: run.providerRunRetries === 0,
   };
 }
+export function executionIdentity(row, source) {
+  if (!row) return;
+  check(
+    row.event_id === source.eventId &&
+      row.envelope_event_id === source.eventId &&
+      row.aggregate_key === REPO &&
+      row.source_version === source.sourceVersion &&
+      row.event_source_version === source.sourceVersion &&
+      row.analysis_id === source.analysisId &&
+      row.receipt_id === source.receiptId &&
+      row.source_hash === source.sourceHash &&
+      row.contract_version === 1 &&
+      row.event_kind === "assessment.completed",
+    "execution_identity_mismatch",
+  );
+  check(
+    ["pending", "leased", "completed"].includes(row.status),
+    "projection_terminal_failure",
+  );
+}
 export function projectionIdentity(row, source, sha) {
   if (!row) return null;
+  if (
+    Number.isSafeInteger(row.source_version) &&
+    row.source_version > 0 &&
+    row.source_version < source.sourceVersion
+  ) {
+    // A previous projection remains visible until the new executor commits its
+    // atomic replacement. Only an internally coherent, strictly older record
+    // is pending; equal/newer or damaged identities retain the hard failure.
+    // Its former eligibility/job outcome cannot determine the new assessment's
+    // result, and returning null never authorizes this previous project.
+    check(
+      [row.analysis_id, row.event_id, row.receipt_id].every(id) &&
+        row.version_analysis_id === row.analysis_id &&
+        row.event_analysis_id === row.analysis_id &&
+        row.job_event_id === row.event_id &&
+        row.job_source_version === row.source_version &&
+        row.event_source_version === row.source_version &&
+        row.event_receipt_id === row.receipt_id &&
+        row.event_contract_version === 1 &&
+        row.job_repo === REPO &&
+        typeof row.resolved_commit_sha === "string" &&
+        /^[a-f0-9]{40}$/.test(row.resolved_commit_sha) &&
+        ["app_submission", "agent_submission", "verified_backfill"].includes(
+          row.source_kind,
+        ) &&
+        [row.source_hash, row.version_source_hash, row.event_source_hash].every(
+          hash,
+        ) &&
+        row.source_hash === row.version_source_hash &&
+        ["pending", "leased", "completed", "dead_letter"].includes(
+          row.job_status,
+        ) &&
+        [0, 1].includes(row.published) &&
+        [0, 1].includes(row.removed) &&
+        typeof row.blocked_reason === "string" &&
+        (row.revoked_at === null ||
+          (Number.isSafeInteger(row.revoked_at) && row.revoked_at >= 0)),
+      "projection_identity_mismatch",
+    );
+    return null;
+  }
   check(
     row.analysis_id === source.analysisId &&
       row.version_analysis_id === source.analysisId &&
@@ -589,7 +684,35 @@ export async function waitAssessment(path, output, options = {}) {
   const initial = await load(path);
   check(initial, "assessment_receipt_required");
   let r = validateReceipt(initial);
-  const c = context(options, LIMITS.publicWaitMs + LIMITS.projectionWaitMs);
+  const now = options.now ?? Date.now;
+  const sourceCompleted =
+    r.completionObservedAt !== undefined ||
+    r.status === "completed" ||
+    r.phase === "completed";
+  const windowExhausted =
+    r.projectionPolls >= LIMITS.projectionPolls ||
+    (r.projectionStartedAt !== undefined &&
+      now() >= r.projectionStartedAt + LIMITS.projectionWaitMs);
+  const terminalRead =
+    r.phase === "completed" || (sourceCompleted && windowExhausted);
+  // The combined provider/bootstrap/projection deadline is durable across reruns.
+  // Completed results retain only their pre-existing, finite read-only recovery.
+  if (!terminalRead && r.phase !== "skipped") {
+    r.waitStartedAt ??= now();
+    check(
+      now() < r.waitStartedAt + LIMITS.waitMs,
+      "assessment_deadline_exceeded",
+    );
+    await save(path, r);
+  }
+  const c = context(
+    options,
+    terminalRead
+      ? LIMITS.terminalWaitMs
+      : r.waitStartedAt === undefined
+        ? LIMITS.waitMs
+        : r.waitStartedAt + LIMITS.waitMs - now(),
+  );
   try {
     if (r.phase === "skipped") {
       const rows = await c.query("candidate", [
@@ -615,16 +738,6 @@ export async function waitAssessment(path, output, options = {}) {
     // A completed source skips provider reconciliation but still gets its
     // unused projection window. Only an exhausted window or a previously
     // verified projection uses the separately bounded terminal revalidation.
-    const sourceCompleted =
-      r.completionObservedAt !== undefined ||
-      r.status === "completed" ||
-      r.phase === "completed";
-    const windowExhausted =
-      r.projectionPolls >= LIMITS.projectionPolls ||
-      (r.projectionStartedAt !== undefined &&
-        c.now() >= r.projectionStartedAt + LIMITS.projectionWaitMs);
-    const terminalRead =
-      r.phase === "completed" || (sourceCompleted && windowExhausted);
     if (terminalRead)
       check(
         (r.terminalRevalidations ?? 0) < LIMITS.terminalRevalidations,
@@ -656,6 +769,11 @@ export async function waitAssessment(path, output, options = {}) {
         source,
         projection,
         polls: r.polls,
+        relayBootstrapPolls: r.relayBootstrapPolls ?? 0,
+        relayBootstrapStartedAt: r.relayBootstrapStartedAt ?? null,
+        relayDeliveredObservedAt: r.relayDeliveredObservedAt ?? null,
+        relayBootstrapIsNormalProjectionLatency: false,
+        managementRequests: c.counts().management,
         projectionPolls: r.projectionPolls,
         terminalRevalidations: r.terminalRevalidations ?? 0,
         verification: terminalRead
@@ -674,15 +792,13 @@ export async function waitAssessment(path, output, options = {}) {
       await save(path, r);
       return result;
     }
-    async function observeProjection(deadline) {
+    async function observeSource(deadline) {
       const sources = await c.query("source", [r.analysisId, REPO], deadline);
       check(sources.length === 1, "source_finalization_missing");
-      const source = sourceIdentity(
-        sources[0],
-        r.sourceSha,
-        r.analysisId,
-        web.agentId,
-      );
+      return sourceIdentity(sources[0], r.sourceSha, r.analysisId, web.agentId);
+    }
+    async function observeProjection(deadline) {
+      const source = await observeSource(deadline);
       const rows = await c.query("projection", [REPO], deadline);
       check(rows.length <= 1, "ambiguous_projection");
       return {
@@ -738,6 +854,80 @@ export async function waitAssessment(path, output, options = {}) {
     }
     check(completed, "assessment_wait_exhausted");
     r.completionObservedAt ??= c.now();
+    await save(path, r);
+    if (
+      r.projectionStartedAt === undefined &&
+      r.relayDeliveredObservedAt === undefined
+    ) {
+      // https://developers.cloudflare.com/workers/configuration/cron-triggers/
+      // Adding the production cron may propagate for up to 15 minutes. This
+      // separately journaled bootstrap applies only to a finalized source that
+      // is still pending/leased; it never refreshes provider/projection quotas.
+      const bootstrapAvailable = () => {
+        check(
+          (r.relayBootstrapPolls ?? 0) < LIMITS.relayBootstrapPolls &&
+            (r.relayBootstrapStartedAt === undefined ||
+              c.now() <
+                r.relayBootstrapStartedAt +
+                  LIMITS.relayBootstrapWaitMs +
+                  LIMITS.relayBootstrapReadMs),
+          "relay_bootstrap_exhausted",
+        );
+      };
+      bootstrapAvailable();
+      // Resume from the persisted immutable source anchor. Do not add an
+      // uncounted source probe on every restart or skip a reserved poll slot.
+      let source =
+        r.relayBootstrapSource === undefined
+          ? await observeSource()
+          : { ...r.relayBootstrapSource, outboxStatus: "pending" };
+      if (source.outboxStatus !== "delivered") {
+        r.relayBootstrapStartedAt ??= c.now();
+        r.relayBootstrapPolls ??= 0;
+        r.relayBootstrapSource ??= {
+          eventId: source.eventId,
+          receiptId: source.receiptId,
+          sourceVersion: source.sourceVersion,
+          sourceHash: source.sourceHash,
+        };
+        await save(path, r);
+        while (source.outboxStatus !== "delivered") {
+          bootstrapAvailable();
+          const slot =
+            r.relayBootstrapStartedAt +
+            r.relayBootstrapPolls * LIMITS.relayBootstrapIntervalMs;
+          if (c.now() < slot) await c.sleep(slot - c.now());
+          bootstrapAvailable();
+          // Slot six starts at +900s; its two parallel reads get at most 15s,
+          // also bounded by the original 1980s overall deadline.
+          const deadline = Math.min(
+            c.now() + LIMITS.relayBootstrapReadMs,
+            r.relayBootstrapStartedAt +
+              LIMITS.relayBootstrapWaitMs +
+              LIMITS.relayBootstrapReadMs,
+          );
+          r.relayBootstrapPolls++;
+          await save(path, r); // Reserve before I/O: interruption/ack loss consumes a slot.
+          const eventId = source.eventId;
+          const [next, jobs] = await Promise.all([
+            observeSource(deadline),
+            c.query("execution", [eventId], deadline),
+          ]);
+          check(
+            next.eventId === source.eventId &&
+              next.receiptId === source.receiptId &&
+              next.sourceVersion === source.sourceVersion &&
+              next.sourceHash === source.sourceHash,
+            "source_finalization_identity_mismatch",
+          );
+          check(jobs.length <= 1, "ambiguous_execution");
+          executionIdentity(jobs[0], next);
+          source = next;
+        }
+      }
+      r.relayDeliveredObservedAt = c.now();
+      await save(path, r);
+    }
     r.projectionStartedAt ??= c.now();
     await save(path, r);
     while (
