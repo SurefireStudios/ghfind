@@ -36,6 +36,22 @@ for (let i=1;i<order.length;i++) if(deployJob.indexOf(order[i])<=deployJob.index
 // platform rollout step, but retain all actual readiness/instance gates.
 const runtimeDeploys = deployJob.split('\n').filter(line => line.includes('wrangler deploy --config platform/runtime/wrangler.production.generated.json'));
 if (runtimeDeploys.length !== 2 || runtimeDeploys.some(line => !line.includes('--containers-rollout=immediate'))) throw new Error('Paused production runtime requires explicit immediate Container rollout');
+const imageStep = /      - name: Build and push the portable image[^\n]*\n([\s\S]*?)(?=      - name:)/.exec(deployJob)?.[1] ?? '';
+for (const fragment of ['openssl rand -hex 32', '--build-arg IMAGE_BUILD_ID="$FEED_IMAGE_BUILD_ID"',
+  '--entrypoint /usr/local/bin/feed-api', '--entrypoint /usr/local/bin/feed-worker', '--build-info',
+  'node scripts/feed-image-proof.mjs "$image_ref"', 'FEED_IMAGE_BUILD_ID=$FEED_IMAGE_BUILD_ID']) {
+  if (!imageStep.includes(fragment)) throw new Error(`Production compiled image proof missing ${fragment}`);
+}
+const containment = /      - name: Contain failed cutover[^\n]*\n([\s\S]*?)(?=      - name:)/.exec(deployJob)?.[1] ?? '';
+if (!containment.includes("always() && steps.paused.outputs.version != '' && steps.admission.outputs.started == 'true' && steps.smoke.outcome != 'success'"))
+  throw new Error('Incomplete or cancelled admission must retain Go-only containment');
+for (const fragment of ['timeout-minutes: 3', 'timeout --signal=TERM --kill-after=5s 120s',
+  'timeout --signal=TERM --kill-after=5s 30s', 'containment-attempt.json', 'attempted_unverified'])
+  if (!containment.includes(fragment)) throw new Error(`Containment deadline/evidence missing ${fragment}`);
+const admissionAt = deployJob.indexOf('      - name: Record gateway admission intent');
+if (admissionAt < 0 || admissionAt >= deployJob.indexOf('      - name: Cut all Feed requests') ||
+    !deployJob.slice(admissionAt, deployJob.indexOf('      - name: Cut all Feed requests')).includes('echo "started=true" >> "$GITHUB_OUTPUT"'))
+  throw new Error('Gateway admission intent must precede any possible all deployment');
 for (const [mode, title] of [['off', 'Deploy private adapter and off-mode candidate by immutable digest'], ['baseline', 'Activate executor and verify actual baseline instances before gateway traffic']]) {
   const step = new RegExp(`      - name: ${title}\\n([\\s\\S]*?)(?=      - name:)`).exec(deployJob)?.[1] ?? '';
   const capture = `node scripts/feed-platform-production.mjs snapshot ops/feed-production-manifest.json "$RUNNER_TEMP/feed-production-evidence/applications-before-${mode}.json"`;

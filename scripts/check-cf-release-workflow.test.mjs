@@ -72,3 +72,17 @@ test('each runtime deployment captures and verifies its own preceding applicatio
     assert.throws(() => check({ 'deploy-cf-production.yml': production.replace(verify, ` ${mode} "$RUNNER_TEMP/feed-production-evidence/runtime-${mode}.json"`) }));
   }
 });
+
+test('cancelled or incomplete cutover cannot escape containment after admission begins', () => {
+  const original=originals['deploy-cf-production.yml'];
+  for(const replacement of ['failure()', 'cancelled()'])
+    assert.throws(()=>check({'deploy-cf-production.yml': original.replace('always() && steps.paused',replacement+' && steps.paused')}));
+  assert.throws(()=>check({'deploy-cf-production.yml':original.replace("steps.smoke.outcome != 'success'", "steps.smoke.outcome == 'failure'")}));
+  assert.throws(()=>check({'deploy-cf-production.yml':original.replace('          echo "started=true" >> "$GITHUB_OUTPUT"','          true')}));
+});
+
+test('a configured image identity does not replace inspection of both compiled entrypoints', () => {
+  const original=originals['deploy-cf-production.yml'];
+  for(const fragment of ['--build-arg IMAGE_BUILD_ID="$FEED_IMAGE_BUILD_ID"','--entrypoint /usr/local/bin/feed-worker','node scripts/feed-image-proof.mjs "$image_ref"'])
+    assert.throws(()=>check({'deploy-cf-production.yml':original.replace(fragment,'')}));
+});

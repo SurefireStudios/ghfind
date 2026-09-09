@@ -2,7 +2,7 @@ import { nativeDispatch } from './helpers/native-proof';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { setImmediate } from 'node:timers/promises';
-import { handleRequest, type Dispatch, type RuntimeSettings, type Target } from '../src/router';
+import { handleRequest, type RuntimeSettings, type Target } from '../src/router';
 const env: RuntimeSettings = {
   FEED_ENVIRONMENT: 'production', FEED_IMAGE_BUILD_ID: 'd'.repeat(64), FEED_RELEASE_SHA: 'a'.repeat(40),
   FEED_IMAGE_REFERENCE: `registry.cloudflare.com/8f19bebe359e4ec1a24c68c5f49c1584/ghfind-feed@sha256:${'b'.repeat(64)}`,

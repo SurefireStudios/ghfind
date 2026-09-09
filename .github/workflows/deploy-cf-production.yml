@@ -108,9 +108,15 @@ jobs:
         id: image
         run: |
           set -euo pipefail
-          docker build --platform linux/amd64 --build-arg VERSION="$RELEASE_SHA" -f Dockerfile.feed -t "ghfind-feed:$RELEASE_SHA" .
+          export FEED_IMAGE_BUILD_ID="$(openssl rand -hex 32)"
+          echo "FEED_IMAGE_BUILD_ID=$FEED_IMAGE_BUILD_ID" >> "$GITHUB_ENV"
+          docker build --platform linux/amd64 --build-arg VERSION="$RELEASE_SHA" --build-arg IMAGE_BUILD_ID="$FEED_IMAGE_BUILD_ID" -f Dockerfile.feed -t "ghfind-feed:$RELEASE_SHA" .
+          # Inspect the compiled entrypoints themselves, without starting services.
+          docker run --rm --network none --entrypoint /usr/local/bin/feed-api "ghfind-feed:$RELEASE_SHA" --build-info > "$RUNNER_TEMP/feed-production-evidence/image-api.json"
+          docker run --rm --network none --entrypoint /usr/local/bin/feed-worker "ghfind-feed:$RELEASE_SHA" --build-info > "$RUNNER_TEMP/feed-production-evidence/image-worker.json"
           platform/runtime/node_modules/.bin/wrangler containers push "ghfind-feed:$RELEASE_SHA" --config platform/runtime/wrangler.jsonc
           image_ref="$(docker image inspect "registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/ghfind-feed:$RELEASE_SHA" --format '{{json .RepoDigests}}' | jq -er --arg prefix "registry.cloudflare.com/$CLOUDFLARE_ACCOUNT_ID/ghfind-feed@sha256:" '[.[] | select(startswith($prefix))] | if length == 1 then .[0] else error("unambiguous pushed digest required") end')"
+          node scripts/feed-image-proof.mjs "$image_ref" "$RUNNER_TEMP/feed-production-evidence"
           echo "reference=$image_ref" >> "$GITHUB_OUTPUT"
       - name: Ensure the pinned resources and record their actual identities
         id: resources
@@ -179,6 +185,10 @@ jobs:
       - name: Verify bounded authenticated Go service contracts before opening the gateway
         run: |
           node scripts/feed-production-smoke.mjs --mode all --runtime-mode baseline --release-sha "$RELEASE_SHA" --image "${{ steps.image.outputs.reference }}" --writer-epoch 1 --profile cf_d1_r2 --output "$RUNNER_TEMP/feed-production-evidence/service-smoke.json" --execute
+      - name: Record gateway admission intent before starting the cutover
+        id: admission
+        run: |
+          echo "started=true" >> "$GITHUB_OUTPUT"
       - name: Cut all Feed requests to the verified Go runtime
         id: cutover
         run: |
@@ -197,11 +207,15 @@ jobs:
           SMOKE_FACET_VALUE: TypeScript
         run: pnpm smoke:deployment
       - name: Contain failed cutover using the verified Go-only paused anchor
-        if: ${{ failure() && steps.paused.outputs.version != '' && (steps.cutover.outcome == 'failure' || steps.smoke.outcome == 'failure') }}
+        if: ${{ always() && steps.paused.outputs.version != '' && steps.admission.outputs.started == 'true' && steps.smoke.outcome != 'success' }}
+        timeout-minutes: 3
+        env:
+          PAUSED_ANCHOR: ${{ steps.paused.outputs.version }}
         run: |
           set -euo pipefail
-          platform/runtime/node_modules/.bin/wrangler rollback "${{ steps.paused.outputs.version }}" --name ghfind --message "Contain failed Go cutover; preserve writer2 data" --yes
-          node scripts/feed-production-release.mjs web-verify "$RELEASE_SHA" paused "$RUNNER_TEMP/feed-production-evidence/containment.json"
+          node -e 'require("node:fs").writeFileSync(process.env.RUNNER_TEMP+"/feed-production-evidence/containment-attempt.json",JSON.stringify({status:"attempted_unverified",sourceSha:process.env.RELEASE_SHA,pausedAnchor:process.env.PAUSED_ANCHOR,observedAt:new Date().toISOString()}),{mode:0o600,flag:"wx"})'
+          timeout --signal=TERM --kill-after=5s 120s platform/runtime/node_modules/.bin/wrangler rollback "$PAUSED_ANCHOR" --name ghfind --message "Contain failed Go cutover; preserve writer2 data" --yes
+          timeout --signal=TERM --kill-after=5s 30s node scripts/feed-production-release.mjs web-verify "$RELEASE_SHA" paused "$RUNNER_TEMP/feed-production-evidence/containment.json"
       - name: Preserve nonsecret actual evidence, including failures
         if: always()
         uses: actions/upload-artifact@v4

@@ -32,6 +32,8 @@ import {
   validatePreviousApplications,
 } from "./feed-platform-production-readback.mjs";
 
+const imageBuildId = "e".repeat(64);
+process.env.FEED_IMAGE_BUILD_ID = imageBuildId;
 const m = {
   ...template(),
   billing: {
@@ -77,6 +79,9 @@ function fixture(mode = "off", options = {}) {
     containers: ["api-0", "api-1", "executor-0"].map((target) => ({
       target,
       ready: true,
+      imageBuildId,
+      actorId: String(["api-0", "api-1", "executor-0"].indexOf(target)+1).repeat(64),
+      running: true,
       version: sha,
       contractVersion: "1",
       storageWriterVersion: 2,
@@ -347,7 +352,7 @@ test("stale dashboard versions and health cannot override current authoritative 
       2,
       "one paired direct read, then one paired final read",
     );
-    assert.equal(r.keepWarm.metadataReads, 25);
+    assert.equal(r.keepWarm.metadataReads, 23);
     assert.ok(
       r.applications.every((a) => a.version === 7 && a.image === image),
     );
@@ -405,7 +410,7 @@ test("direct health accepts documented optional absence and actual cold idle but
     const f = fixture("off", { appInfo });
     const r = await verifyDeployment(m, sha, image, "off", f.options);
     assert.equal(r.status, "passed");
-    assert.equal(f.count().instanceCalls, 2);
+    assert.equal(f.count().instanceCalls, 0);
     assert.equal(r.readiness.length, 3);
   }
   for (const appInfo of [
@@ -484,7 +489,7 @@ test("final direct details also recheck capacity, namespace and health without t
       },
     );
     assert.equal(f.count().infoRound, 2);
-    assert.equal(f.count().instanceCalls, 2);
+    assert.equal(f.count().instanceCalls, 0);
   }
 });
 test("predeployment snapshot permits only the exact prior digest/version until the expected app converges", async () => {
@@ -520,7 +525,7 @@ test("predeployment snapshot permits only the exact prior digest/version until t
       (a) =>
         a.image === image &&
         a.version === 7 &&
-        a.instances.every((i) => i.state === "running" && i.version === 7),
+        a.instances.every((i) => i.state === "running" && i.imageBuildId === imageBuildId),
     ),
   );
   assert.equal(JSON.stringify(r).includes("never-upload-snapshot"), false);
@@ -824,43 +829,20 @@ test("same-image versions cannot regress and only equal or ordered numeric versi
     /application_identity_changed/,
   );
 });
-test("prior-image and instance maximum attempts fit 51 metadata reads without resetting application budgets", async () => {
+test("prior-image and native proof maximum attempts fit 35 metadata reads without resetting application budgets", async () => {
   const previous = previousApps();
-  const f = fixture("off", {
-    previousApplications: previous,
-    bounds: { applicationIntervalMs: 1, instanceIntervalMs: 1 },
-    applications: (apps, call) =>
-      apps.map((app, i) => (call < 7 ? { ...app, ...previous[i] } : app)),
-    instances: (r, { attempt }) =>
-      attempt < 8
-        ? {
-            ...r,
-            instances: r.instances.map((i) => ({
-              ...i,
-              state: "provisioning",
-            })),
-          }
-        : r,
-  });
+  const f = fixture("off", { previousApplications: previous,
+    bounds: { applicationIntervalMs: 1 },
+    applications: (apps, call) => apps.map((app, i) => call < 7 ? { ...app, ...previous[i] } : app) });
   const r = await verifyDeployment(m, sha, image, "off", f.options);
-  assert.equal(r.keepWarm.metadataReads, 51);
-  assert.equal(f.count().listCalls, 1);
-  assert.equal(f.count().infoRound, 8);
-  assert.deepEqual(
-    r.applicationObservations
-      .filter((o) => o.phase === "final")
-      .map((o) => o.attempt),
-    [8, 8],
-  );
+  assert.equal(r.keepWarm.metadataReads, 35);
+  assert.equal(f.count().instanceCalls, 0);
   assert.equal(r.applicationObservations.length, 16);
-  assert.equal(r.instanceObservations.length, 16);
-  assert.equal(r.keepWarm.readinessRequests, 18);
-  assert.ok(
-    r.applicationObservations
-      .filter((o) => o.phase !== "final")
-      .every((o) => o.attempt <= 8),
-  );
+  assert.equal(r.instanceObservations.length, 2);
+  assert.equal(limits.durationMs, 180000);
+  assert.equal(limits.readinessRequests, 95);
 });
+
 test("initial protected dependency failures retry only after both Worker identities are verified", async () => {
   const f = fixture("off", {
     bounds: { initialReadinessIntervalMs: 1 },
@@ -904,6 +886,20 @@ test("initial protected dependency failures retry only after both Worker identit
   );
   assert.equal(JSON.stringify(r).includes("never-upload-error"), false);
   assert.equal(r.keepWarm.readinessRequests, 6);
+});
+test("native cold preparation may retry initially but never substitutes for actual binary proof",async()=>{
+  const f=fixture("off",{bounds:{initialReadinessIntervalMs:1},readyResponse:call=>call===1?
+    Response.json({error:"container_starting"},{status:503}):null});
+  const r=await verifyDeployment(m,sha,image,"off",f.options);
+  assert.equal(r.readinessObservations[0].errorCode,"container_starting");
+  assert.equal(r.readiness.length,3);
+  const late=fixture("off",{readyResponse:call=>call===2?
+    Response.json({error:"container_starting"},{status:503}):null});
+  await assert.rejects(verifyDeployment(m,sha,image,"off",late.options),/HTTP 503/);
+});
+test("a native actor cannot change between initial and final process checks",async()=>{
+  const f=fixture("off",{ready:(r,call)=>{if(call>1)r.containers[0].actorId="9".repeat(64);return r;}});
+  await assert.rejects(verifyDeployment(m,sha,image,"off",f.options),/native actor changed/);
 });
 test("nondependency HTTP failures and malformed error responses preserve safe diagnostics without retry", async () => {
   for (const makeResponse of [
@@ -1105,7 +1101,7 @@ test("bootstrap off has no asynchronous entrypoints; production resources and ca
 test("actual readback whitelists all published identity fields and gates baseline", async () => {
   const f = fixture();
   const r = await verifyDeployment(m, sha, image, "off", f.options);
-  assert.equal(r.keepWarm.metadataReads, 25);
+  assert.equal(r.keepWarm.metadataReads, 23);
   assert.equal(r.keepWarm.stopped, true);
   assert.equal(r.status, "passed");
   assert.equal(JSON.stringify(r).includes("must-not-upload"), false);
@@ -1157,6 +1153,24 @@ test("actual readback whitelists all published identity fields and gates baselin
     /missing/,
   );
 });
+test("baseline cannot consume a v2 receipt with missing identity, policy or budget evidence",async()=>{
+  const f=fixture(), receipt=await verifyDeployment(m,sha,image,"off",f.options);
+  for(const change of [
+    r=>{delete r.applications[0].applicationId;},r=>{r.applications[0].version={version:7};},
+    r=>{delete r.runtime.deploymentId;},r=>{delete r.adapter.bindingIdentitySHA256;},
+    r=>{delete r.keepWarm.limits;},r=>{delete r.keepWarm.readinessRequests;},
+    r=>{r.keepWarm.limits.metadataReads=999;},r=>{r.keepWarm.metadataReads=999;},
+    r=>{delete r.asyncTriggers.queues;},r=>{delete r.asyncTriggers.schedules;},
+    r=>{r.asyncTriggers.queues[0].deliveryPaused=true;},
+    r=>{r.applications[0].instances[0].id=r.readiness[1].actorId;},
+  ]) {
+    const r=structuredClone(receipt);change(r);
+    assert.throws(()=>renderRuntime(m,image,sha,"baseline",r));
+  }
+  const b=fixture("baseline"), baseline=await verifyDeployment(m,sha,image,"baseline",b.options);
+  baseline.asyncTriggers.queues[0].consumers[0].worker="foreign-staging";
+  assert.throws(()=>validateReceipt(baseline,m,sha,image,"baseline"),/consumer policy/);
+});
 test("Wrangler ready application summary still requires all named running instances and readiness", async () => {
   // Match the observed first production list: API active/2, executor ready/1.
   // Also cover ready for both applications: app.instances is an independent count.
@@ -1170,17 +1184,17 @@ test("Wrangler ready application summary still requires all named running instan
     });
     const r = await verifyDeployment(m, sha, image, "off", f.options);
     assert.equal(r.status, "passed");
-    assert.equal(r.keepWarm.metadataReads, 25);
+    assert.equal(r.keepWarm.metadataReads, 23);
     assert.deepEqual(
       r.applications.map((a) =>
-        a.instances.map((i) => [i.name, i.state, i.version]),
+        a.instances.map((i) => [i.name, i.state, i.imageBuildId]),
       ),
       [
         [
-          ["api-0", "running", 7],
-          ["api-1", "running", 7],
+          ["api-0", "running", imageBuildId],
+          ["api-1", "running", imageBuildId],
         ],
-        [["executor-0", "running", 7]],
+        [["executor-0", "running", imageBuildId]],
       ],
     );
     assert.equal(r.readiness.length, 3);
@@ -1216,7 +1230,7 @@ test("only correctly identified provisioning applications can converge before st
   });
   const r = await verifyDeployment(m, sha, image, "off", f.options);
   assert.equal(r.status, "passed");
-  assert.equal(r.keepWarm.metadataReads, 31);
+  assert.equal(r.keepWarm.metadataReads, 29);
   assert.deepEqual(
     r.applicationObservations.map((o) => o.status),
     [
@@ -1247,7 +1261,7 @@ test("only correctly identified provisioning applications can converge before st
   );
   assert.ok(
     r.applications.every((a) =>
-      a.instances.every((i) => i.state === "running" && i.version === 7),
+      a.instances.every((i) => i.state === "running" && i.imageBuildId === imageBuildId),
     ),
   );
   assert.equal(JSON.stringify(r).includes("must-not-upload"), false);
@@ -1375,35 +1389,20 @@ test("the first shared application metadata request is included in the convergen
   assert.equal(f.count().metadataCalls, 1);
   assert.equal(f.count().instanceCalls, 0);
 });
-test("maximal application and instance convergence stays within fixed 180s and 52 metadata quotas", async () => {
-  const f = fixture("off", {
-    bounds: { applicationIntervalMs: 1, instanceIntervalMs: 1 },
-    applications: (apps, call) =>
-      apps.map((app, i) => ({
-        ...app,
-        state: call < 7 ? "provisioning" : "ready",
-      })),
-    instances: (r, { attempt }) =>
-      attempt < 8
-        ? {
-            ...r,
-            instances: r.instances.map((i) => ({
-              ...i,
-              state: "provisioning",
-            })),
-          }
-        : r,
-  });
+test("maximal application and native proof convergence stays within fixed 180s and 52 metadata quotas", async () => {
+  const previous = previousApps();
+  const f = fixture("off", { previousApplications: previous,
+    bounds: { applicationIntervalMs: 1 },
+    applications: (apps, call) => apps.map((app, i) => call < 7 ? { ...app, ...previous[i] } : app) });
   const r = await verifyDeployment(m, sha, image, "off", f.options);
+  assert.equal(r.keepWarm.metadataReads, 35);
+  assert.equal(f.count().instanceCalls, 0);
+  assert.equal(r.applicationObservations.length, 16);
+  assert.equal(r.instanceObservations.length, 2);
   assert.equal(limits.durationMs, 180000);
   assert.equal(limits.readinessRequests, 95);
-  assert.equal(limits.applicationAttempts, 8);
-  assert.equal(limits.applicationConvergenceMs, 60000);
-  assert.equal(r.applicationObservations.length, 16);
-  assert.equal(r.instanceObservations.length, 16);
-  assert.equal(r.keepWarm.metadataReads, 51);
-  assert.equal(r.keepWarm.readinessRequests, 18);
 });
+
 test("ready application summary cannot hide immutable application identity drift", async () => {
   for (const transform of [
     (apps) => [
@@ -1424,148 +1423,59 @@ test("ready application summary cannot hide immutable application identity drift
     );
   }
 });
-test("ready application summary cannot replace running instance, version or population proof", async () => {
-  const changes = [
-    // Wrangler uses running, not active; inactive/null is a registered DO without a running instance.
-    ...[
-      "active",
-      "inactive",
-      "provisioning",
-      "failed",
-      "stopping",
-      "stopped",
-      "unhealthy",
-      "unknown",
-    ].map((state) => (result) => ({
-      ...result,
-      instances: result.instances.map((i) => ({
-        ...i,
-        state,
-        ...(state === "inactive" ? { version: null } : {}),
-      })),
-    })),
-    (result) => ({
-      ...result,
-      instances: result.instances.map((i) => ({ ...i, version: 6 })),
-    }),
-    (result) => ({
-      ...result,
-      instances: result.instances.map((i) => ({ ...i, name: "foreign" })),
-    }),
-    (result) => ({
-      ...result,
-      instances: result.instances.map((i) => ({ ...i, id: null })),
-    }),
-    (result) => ({ ...result, instances: result.instances.slice(1) }),
-    (result) => ({
-      ...result,
-      instances: result.instances.map(() => result.instances[0]),
-    }),
-    (result) => ({
-      ...result,
-      result_info: { next_page_token: "another-page" },
-    }),
-  ];
-  for (const instances of changes) {
-    const f = fixture("off", {
-      applications: (apps) => apps.map((app) => ({ ...app, state: "ready" })),
-      instances,
-      bounds: { instanceAttempts: 2, instanceIntervalMs: 1 },
-    });
-    await assert.rejects(
-      verifyDeployment(m, sha, image, "off", f.options),
-      /instance version\/state differs|unexpected instance population/,
-    );
+test("direct image metadata cannot replace native running, unique actor and compiled binary proof", async () => {
+  for (const patch of [{ running: false }, { running: undefined }, { actorId: null },
+    { actorId: "not-a-do-id" }, { imageBuildId: "f".repeat(64) }, { imageBuildId: undefined }]) {
+    const f = fixture("off", { ready: r => { Object.assign(r.containers[0],patch); return r; } });
+    await assert.rejects(verifyDeployment(m,sha,image,"off",f.options), /container readiness differs/);
+  }
+  for (const ready of [r => ({ ...r, containers: r.containers.slice(1) }),
+    r => { r.containers[1].actorId=r.containers[0].actorId; return r; }]) {
+    const f=fixture("off",{ready});
+    await assert.rejects(verifyDeployment(m,sha,image,"off",f.options), /population differs/);
   }
 });
-test("ready summary and matching instances cannot hide a final process readiness change", async () => {
-  const f = fixture("baseline", {
-    applications: (apps) => apps.map((app) => ({ ...app, state: "ready" })),
-    ready: (r, _call, { metadataCalls }) => {
-      if (metadataCalls === 7) r.containers[2].mode = "off";
-      return r;
-    },
-  });
-  await assert.rejects(
-    verifyDeployment(m, sha, image, "baseline", f.options),
-    /container readiness differs/,
-  );
-  assert.equal(f.count().metadataCalls, 7);
+
+test("final process proof cannot drift after direct application readback", async () => {
+  const f=fixture("baseline",{ready:(r,_call,{metadataCalls})=>{
+    if(metadataCalls===5) r.containers[2].imageBuildId="f".repeat(64); return r;
+  }});
+  await assert.rejects(verifyDeployment(m,sha,image,"baseline",f.options),/container readiness differs/);
 });
-test("bounded placement convergence preserves each actual snapshot and requires fresh process readiness", async () => {
-  const f = fixture("off", {
-    bounds: { instanceIntervalMs: 1 },
-    instances: (result, { appId, attempt }) => {
-      if (appId === id(3) && attempt < 4) {
-        const patch = [
-          { state: "inactive", version: null },
-          { state: "stopped", version: 6 },
-          { state: "running", version: 6 },
-        ][attempt - 1];
-        Object.assign(result.instances[1], patch);
-      }
-      return result;
-    },
-  });
-  const r = await verifyDeployment(m, sha, image, "off", f.options);
-  assert.equal(r.status, "passed");
-  assert.equal(r.keepWarm.metadataReads, 28);
-  assert.equal(f.count().instanceCalls, 5);
-  assert.ok(f.count().readyCalls >= 7);
-  assert.deepEqual(
-    r.instanceObservations.map((o) => o.status),
-    ["pending", "pending", "pending", "converged", "converged"],
-  );
-  assert.deepEqual(
-    r.instanceObservations
-      .slice(0, 4)
-      .map((o) => [o.instances[1].state, o.instances[1].version]),
-    [
-      ["inactive", null],
-      ["stopped", 6],
-      ["running", 6],
-      ["running", 7],
-    ],
-  );
-  for (const o of r.instanceObservations) {
-    assert.equal(o.applicationVersion, 7);
-    assert.ok(Date.parse(o.readinessObservedAt) <= Date.parse(o.observedAt));
-    assert.deepEqual(Object.keys(o.instances[0]), [
-      "id",
-      "name",
-      "state",
-      "version",
-    ]);
+
+test("runtime proof records actual actors without claiming dashboard placement versions", async () => {
+  const f=fixture("off",{instances:()=>{throw new Error("dashboard must not be queried");}});
+  const r=await verifyDeployment(m,sha,image,"off",f.options);
+  assert.equal(f.count().instanceCalls,0);
+  assert.equal(r.instanceObservations.length,2);
+  for(const o of r.instanceObservations){
+    assert.equal(o.proofSource,"durable-object-native");
+    for(const i of o.instances){
+      assert.equal(i.imageBuildId,imageBuildId); assert.match(i.id,/^[a-f0-9]{64}$/);
+      assert.equal(i.version,undefined); assert.equal(i.state,"running");
+    }
   }
-  assert.equal(JSON.stringify(r).includes("must-not-upload"), false);
-  assert.equal(JSON.stringify(r).includes("arbitraryBody"), false);
+  assert.equal(JSON.stringify(r).includes("must-not-upload"),false);
 });
-test("permanent placement lag exhausts attempts, persists safe diagnostics and cannot authorize baseline", async () => {
+
+test("native process mismatch persists safe failure evidence and cannot authorize baseline", async () => {
   const directory = mkdtempSync(join(tmpdir(), "ghfind-readback-"));
   const output = join(directory, "failed.json");
   try {
     const f = fixture("off", {
-      bounds: { instanceAttempts: 3, instanceIntervalMs: 1 },
-      instances: (result) => ({
-        ...result,
-        instances: result.instances.map((i) => ({
-          ...i,
-          state: "inactive",
-          version: null,
-        })),
-      }),
+      ready: (r, call) => { if(call>1) r.containers[0].running=false; return r; },
     });
     await assert.rejects(
       verifyProductionToFile(m, sha, image, "off", output, f.options),
-      /convergence attempts exhausted/,
+      /container readiness differs/,
     );
-    assert.equal(f.count().instanceCalls, 3);
+    assert.equal(f.count().instanceCalls, 0);
     const report = JSON.parse(readFileSync(output, "utf8"));
     assert.equal(report.status, "failed");
     assert.equal(report.keepWarm.completed, false);
     assert.equal(report.keepWarm.stopped, true);
     assert.equal(report.stage, "instance_convergence");
-    assert.equal(report.instanceObservations.length, 3);
+    assert.equal(report.instanceObservations.length, 0);
     assert.equal(report.lastValidatedReadiness.length, 3);
     assert.equal(JSON.stringify(report).includes("must-not-upload"), false);
     assert.equal(JSON.stringify(report).includes("arbitraryBody"), false);
@@ -1594,107 +1504,21 @@ test("permanent placement lag exhausts attempts, persists safe diagnostics and c
     rmSync(directory, { recursive: true, force: true });
   }
 });
-test("invalid instance shape or unhealthy placement fails without any retry", async () => {
-  for (const instances of [
-    () => null,
-    (r) => ({ ...r, result_info: undefined }),
-    (r) => ({ ...r, instances: [null, null] }),
-    (r) => ({
-      ...r,
-      instances: r.instances.map((i) => ({ ...i, id: "same-id" })),
-    }),
-    (r) => ({
-      ...r,
-      instances: r.instances.map((i) => ({ ...i, version: null })),
-    }),
-    ...["failed", "unhealthy", "unknown", "active"].map((state) => (r) => ({
-      ...r,
-      instances: r.instances.map((i) => ({ ...i, state })),
-    })),
-  ]) {
-    const f = fixture("off", { instances });
-    await assert.rejects(
-      verifyDeployment(m, sha, image, "off", f.options),
-      (error) => {
-        assert.equal(error.readbackFailure.instanceObservations.length, 1);
-        assert.equal(
-          error.readbackFailure.instanceObservations[0].status,
-          "rejected",
-        );
-        return true;
-      },
-    );
-    assert.equal(f.count().instanceCalls, 1);
-  }
+
+
+test("native proof cannot mask a later wrong process mode", async()=>{
+  const f=fixture("baseline",{ready:(r,call)=>{if(call>=3)r.containers[1].mode="off";return r;}});
+  await assert.rejects(verifyDeployment(m,sha,image,"baseline",f.options),/container readiness differs/);
+  assert.equal(f.count().instanceCalls,0);
 });
-test("instance retry cannot mask wrong actual mode on the next authenticated readiness", async () => {
-  const f = fixture("baseline", {
-    bounds: { instanceIntervalMs: 1 },
-    ready: (r, call) => {
-      if (call >= 3) r.containers[1].mode = "off";
-      return r;
-    },
-    instances: (r) => ({
-      ...r,
-      instances: r.instances.map((i) => ({
-        ...i,
-        state: "stopped",
-        version: 6,
-      })),
-    }),
-  });
-  await assert.rejects(
-    verifyDeployment(m, sha, image, "baseline", f.options),
-    /container readiness differs/,
-  );
-  assert.equal(f.count().instanceCalls, 1);
+
+test("heartbeat native failure aborts pending direct metadata and joins all work", async()=>{
+  const f=fixture("off",{bounds:{intervalMs:5},delay:1000,delayOn:"info-after-first",
+    ready:(r,call)=>{if(call>=3)r.containers[0].running=false;return r;}});
+  await assert.rejects(verifyDeployment(m,sha,image,"off",f.options),/container readiness differs/);
+  const before=f.count().total;await sleep(20);assert.equal(f.count().total,before);
 });
-test("per-app deadline cancels waiting or metadata and never accepts a late snapshot", async () => {
-  for (const blocked of ["wait", "metadata"]) {
-    const f = fixture("off", {
-      bounds: { instanceConvergenceMs: 30, instanceIntervalMs: 100 },
-      instances: async (r, { signal }) => {
-        if (blocked === "metadata") await sleep(1000, undefined, { signal });
-        return {
-          ...r,
-          instances: r.instances.map((i) => ({
-            ...i,
-            state: "inactive",
-            version: null,
-          })),
-        };
-      },
-    });
-    const start = performance.now();
-    await assert.rejects(verifyDeployment(m, sha, image, "off", f.options));
-    assert.ok(performance.now() - start < 500);
-    assert.equal(f.count().instanceCalls, 1);
-    const before = f.count().total;
-    await sleep(20);
-    assert.equal(f.count().total, before);
-  }
-});
-test("heartbeat failure aborts in-flight convergence metadata without another attempt", async () => {
-  const f = fixture("off", {
-    bounds: { intervalMs: 5 },
-    ready: (r, call) => {
-      if (call >= 3) r.containers[0].storageWriterVersion = 1;
-      return r;
-    },
-    instances: async (r, { signal }) => {
-      await sleep(1000, undefined, { signal });
-      return r;
-    },
-  });
-  await assert.rejects(
-    verifyDeployment(m, sha, image, "off", f.options),
-    /container readiness differs/,
-  );
-  assert.equal(f.count().instanceCalls, 1);
-  const before = f.count().total;
-  await sleep(20);
-  assert.equal(f.count().total, before);
-});
+
 test("final application snapshot must retain exact application, image and version", async () => {
   for (const patch of [
     { version: 8 },
@@ -1710,36 +1534,16 @@ test("final application snapshot must retain exact application, image and versio
       verifyDeployment(m, sha, image, "off", f.options),
       /immutable application/,
     );
-    assert.equal(f.count().instanceCalls, 2);
+    assert.equal(f.count().instanceCalls, 0);
   }
 });
-test("fixed readback quotas cover both maximum attempt series without widening time or transport bounds", async () => {
-  assert.equal(limits.durationMs, 180000);
-  assert.equal(limits.metadataReads, 52);
-  assert.equal(limits.readinessRequests, 95);
-  assert.equal(limits.instanceAttempts, 8);
-  assert.equal(limits.instanceConvergenceMs, 60000);
-  assert.equal(limits.metadataMs, 30000);
-  assert.equal(limits.requestMs, 10000);
-  const f = fixture("off", {
-    bounds: { instanceIntervalMs: 1 },
-    instances: (r, { attempt }) =>
-      attempt < 8
-        ? {
-            ...r,
-            instances: r.instances.map((i) => ({
-              ...i,
-              state: "provisioning",
-              version: 7,
-            })),
-          }
-        : r,
-  });
-  const r = await verifyDeployment(m, sha, image, "off", f.options);
-  assert.equal(r.instanceObservations.length, 16);
-  assert.equal(r.keepWarm.metadataReads, 39);
-  assert.equal(r.keepWarm.readinessRequests, 18);
+test("native proofs remove dashboard polling without widening hard quotas",async()=>{
+  assert.equal(limits.durationMs,180000);assert.equal(limits.metadataReads,52);
+  assert.equal(limits.readinessRequests,95);assert.equal(limits.metadataMs,30000);assert.equal(limits.requestMs,10000);
+  const f=fixture(),r=await verifyDeployment(m,sha,image,"off",f.options);
+  assert.equal(r.keepWarm.metadataReads,23);assert.equal(f.count().instanceCalls,0);
 });
+
 test("both runtime and adapter active deployments must stay fixed through readback", async () => {
   for (const changedWorker of [m.runtimeWorker, m.adapterWorker]) {
     const f = fixture("off", { changedWorker });
@@ -1787,7 +1591,7 @@ test("same digest old off process and incompatible writer/epoch/profile are reje
         "off",
         id(1),
       ),
-    /readiness differs/,
+    /readiness differs|population differs/,
   );
 });
 test("remote binding drift or public adapter exposure fails before receipt", async () => {
@@ -1822,7 +1626,7 @@ test(
   "metadata longer than 10-second executor idle window receives bounded readiness and finally stops",
   { timeout: 15000 },
   async () => {
-    const f = fixture("off", { delay: 11000, delayOn: "instances" });
+    const f = fixture("off", { delay: 11000, delayOn: "info-after-first" });
     const r = await verifyDeployment(m, sha, image, "off", f.options);
     assert.ok(r.keepWarm.durationMs >= 11000);
     assert.ok(r.keepWarm.readinessRequests >= 6);
@@ -1886,7 +1690,7 @@ test("actual async wiring is checked for off and baseline and retains only polic
   for (const mode of ["off", "baseline"]) {
     const f = fixture(mode),
       r = await verifyDeployment(m, sha, image, mode, f.options);
-    assert.equal(r.keepWarm.metadataReads, 25);
+    assert.equal(r.keepWarm.metadataReads, 23);
     assert.equal(r.asyncTriggers.verified, true);
     assert.equal(r.asyncTriggers.mode, mode);
     assert.deepEqual(
