@@ -34,15 +34,62 @@ test('runtime credentials are distinct and never enter the Web build environment
  assert.deepEqual(Object.keys(build).filter(k=>/SECRET|TOKEN|NODE_OPTIONS/.test(k)),[]);
  assert.equal(build.NEXT_PUBLIC_SITE_URL,'https://ghfind.com');
 });
-test('readback must observe the actual source, all vars, production bindings and secrets',async()=>{
+function webFixture() {
  const c=renderWeb(sha,'all',provider);
  const bindings=[...Object.entries(c.vars).map(([name,text])=>({name,type:'plain_text',text})),...c.d1_databases.map(b=>({name:b.binding,type:'d1',id:b.database_id})),{name:'FEED_RUNTIME',type:'service',service:c.services[0].service},...c.secrets.required.map(name=>({name,type:'secret_text'}))];
- const version={annotations:{'workers/tag':`production-${sha}`},resources:{bindings}};
- const api=async path=>path.endsWith('/deployments')?{deployments:[{versions:[{percentage:100,version_id:'11111111-1111-4111-8111-111111111111'}]}]}:version;
- assert.equal((await verifyWeb(sha,'all',provider,api)).mode,'all');
- await assert.rejects(verifyWeb(sha,'paused',provider,api));
- version.resources.bindings=bindings.filter(b=>b.name!=='FEED_RUNTIME');await assert.rejects(verifyWeb(sha,'all',provider,api));
- version.resources.bindings=bindings;version.annotations['workers/tag']='production-'+ 'b'.repeat(40);await assert.rejects(verifyWeb(sha,'all',provider,api));
+ const versionId='11111111-1111-4111-8111-111111111111',deploymentId='22222222-2222-4222-8222-222222222222';
+ const version={id:versionId,annotations:{'workers/tag':`production-${sha}`},resources:{bindings}};
+ const deployment={deployments:[{id:deploymentId,versions:[{percentage:100,version_id:versionId}]}]};
+ const paths=[];
+ const api=async path=>{paths.push(path);return structuredClone(path.endsWith('/deployments')?deployment:version);};
+ return {version,bindings,deployment,versionId,deploymentId,paths,api};
+}
+test('Web readback pins both immutable response and stable active deployment with a nonsecret receipt',async()=>{
+ for(const environment of [undefined,'production']) {
+  const f=webFixture();f.bindings.find(b=>b.name==='FEED_RUNTIME').environment=environment;
+  f.bindings.push({name:'PRESERVED_EXISTING_SETTING',type:'plain_text',text:'private-not-in-receipt'});
+  const result=await verifyWeb(sha,'all',provider,f.api);
+  assert.equal(result.mode,'all');assert.equal(result.workerVersionId,f.versionId);assert.equal(result.deploymentId,f.deploymentId);
+  assert.match(result.bindingSHA256,/^[a-f0-9]{64}$/);
+  assert.ok(!JSON.stringify(result).includes('private-not-in-receipt'));
+  assert.deepEqual(f.paths,['/workers/scripts/ghfind/deployments',`/workers/scripts/ghfind/versions/${f.versionId}`,'/workers/scripts/ghfind/deployments']);
+  await assert.rejects(verifyWeb(sha,'paused',provider,f.api));
+ }
+});
+test('Web version response, source tag, binding names/types and production service target reject ambiguity',async()=>{
+ const changes=[
+  f=>{delete f.version.id;},f=>{f.version.id='33333333-3333-4333-8333-333333333333';},
+  f=>{f.version.annotations['workers/tag']='production-'+ 'b'.repeat(40);},
+  f=>{delete f.version.resources.bindings;},f=>{f.bindings.push(null);},f=>{f.bindings.push({name:'',type:'plain_text'});},
+  f=>{f.bindings.push({...f.bindings[0]});},f=>{f.bindings.push({name:'FEED_RUNTIME',type:'secret_text'});},
+  f=>{f.version.resources.bindings=f.bindings.filter(b=>b.name!=='FEED_RUNTIME');},
+  f=>{f.bindings.find(b=>b.name==='FEED_RUNTIME').service='ghfind-feed-runtime-staging';},
+  ...['staging','',null,42].map(environment=>f=>{f.bindings.find(b=>b.name==='FEED_RUNTIME').environment=environment;}),
+  ...['Admin','',null].map(entrypoint=>f=>{f.bindings.find(b=>b.name==='FEED_RUNTIME').entrypoint=entrypoint;}),
+  f=>{f.bindings.find(b=>b.name==='FEED_RUNTIME').type='plain_text';},
+  f=>{f.bindings.find(b=>b.name==='GHFIND_FEED_D1').id='33333333-3333-4333-8333-333333333333';},
+  f=>{f.bindings.find(b=>b.name==='MOSOO_API_TOKEN').type='plain_text';},
+  f=>{f.bindings.find(b=>b.name==='FEED_SOURCE_OUTBOX_ENABLED').text='false';},
+ ];
+ for(const change of changes){const f=webFixture();change(f);await assert.rejects(verifyWeb(sha,'all',provider,f.api));}
+ const f=webFixture();f.bindings.find(b=>b.name==='FEED_RUNTIME').entrypoint='default';
+ assert.equal((await verifyWeb(sha,'all',provider,f.api)).status,'passed');
+});
+test('Web readback rejects malformed, split, replaced or changed deployments including a same-version redeploy',async()=>{
+ const changes=[
+  d=>{delete d.deployments[0].id;},d=>{d.deployments[0].id='not-uuid';},
+  d=>{d.deployments[0].versions[0].version_id='not-uuid';},
+  d=>{d.deployments[0].versions[0].percentage=99;},d=>{d.deployments[0].versions[0].percentage='100';},
+  d=>{d.deployments[0].versions.push({...d.deployments[0].versions[0]});},
+  d=>{d.deployments=[];},d=>{d.deployments[0].versions=null;},
+ ];
+ for(const change of changes){const f=webFixture();change(f.deployment);await assert.rejects(verifyWeb(sha,'all',provider,f.api));assert.equal(f.paths.length,1);}
+ for(const change of [d=>{d.deployments[0].id='33333333-3333-4333-8333-333333333333';},d=>{d.deployments[0].versions[0].version_id='33333333-3333-4333-8333-333333333333';},...changes]) {
+  const f=webFixture();let reads=0;
+  const api=async path=>{const data=await f.api(path);if(path.endsWith('/deployments') && ++reads===2)change(data);return data;};
+  await assert.rejects(verifyWeb(sha,'all',provider,api));assert.equal(f.paths.length,3);
+ }
+ const f=webFixture();await assert.rejects(verifyWeb(sha,'all',provider,async path=>{if(f.paths.length===2)throw new Error('readback_unavailable');return f.api(path);}),/readback_unavailable/);
 });
 test('production Feed schema approval covers the complete fixed migrations without widening dev application releases',async()=>{
  const m=JSON.parse(readFileSync(new URL('../ops/feed-production-schema-release.json',import.meta.url)));

@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { production, validateManifest, secretNames, adapterSecretNames, repository } from './feed-platform-production.mjs';
 import { approvedSchemas } from './feed-platform-schema-release.mjs';
 import { assertNoLocalEnvironmentFiles } from './feed-platform-web.mjs';
@@ -121,19 +122,57 @@ export async function renderSchemas(out) {
   const c={name:'ghfind',account_id:ACCOUNT,compatibility_date:'2026-09-08',d1_databases:[['GHFIND_D1',production.coreDatabase,'core'],['GHFIND_FEED_D1',production.feedDatabase,'feed']].map(([binding,d,k])=>({binding,database_name:d.name,database_id:d.id,migrations_dir:resolve(out,k)}))};
   writeFileSync(resolve(out,'wrangler.json'),JSON.stringify(c,null,2),{flag:'wx'});return resolve(out,'wrangler.json');
 }
+function activeWebDeployment(data) {
+  const deployment = data?.deployments?.[0];
+  const versions = deployment?.versions;
+  const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+  requireThat(Array.isArray(data?.deployments) && uuid.test(deployment?.id ?? '') &&
+    Array.isArray(versions) && versions.length === 1 && versions[0]?.percentage === 100 &&
+    uuid.test(versions[0]?.version_id ?? ''), 'single 100% immutable Web deployment required');
+  return { deploymentId: deployment.id, versionId: versions[0].version_id };
+}
 export async function verifyWeb(sha, mode, provider, api=cf) {
   const expected=renderWeb(sha,mode,provider);
-  const ds=await api('/workers/scripts/ghfind/deployments'),active=ds.deployments?.[0]?.versions;
-  requireThat(active?.length===1 && active[0].percentage===100,'single 100% Web deployment required');
-  const versionId=active[0].version_id,v=await api(`/workers/scripts/ghfind/versions/${versionId}`);
+  const active=activeWebDeployment(await api('/workers/scripts/ghfind/deployments'));
+  const v=await api(`/workers/scripts/ghfind/versions/${active.versionId}`);
+  requireThat(v?.id === active.versionId, 'immutable Web version response mismatch');
   requireThat(v.annotations?.['workers/tag']===`production-${sha}`,'actual Web source tag mismatch');
-  const bindings=v.resources?.bindings??[];
-  for(const [name,text] of Object.entries(expected.vars))requireThat(bindings.some(b=>b.name===name && b.type==='plain_text' && b.text===text),`Web variable mismatch: ${name}`);
-  for(const d of expected.d1_databases)requireThat(bindings.some(b=>b.name===d.binding && b.type==='d1' && b.id===d.database_id),'Web D1 mismatch');
-  requireThat(bindings.some(b=>b.name==='FEED_RUNTIME' && b.type==='service' && b.service===production.runtimeWorker),'Web runtime binding mismatch');
-  for(const name of expected.secrets.required)requireThat(bindings.some(b=>b.name===name && b.type==='secret_text'),`Web credential absent: ${name}`);
-  return {format:'ghfind-feed-production-web-v1',status:'passed',sourceSha:sha,worker:'ghfind',workerVersionId:versionId,mode,backend:'go',store:'cf_d1_r2',observedAt:new Date().toISOString(),runId:process.env.GITHUB_RUN_ID};
+  const bindings=v.resources?.bindings;
+  requireThat(Array.isArray(bindings) && bindings.every(b => b && typeof b.name === 'string' &&
+    b.name.length > 0 && typeof b.type === 'string') && new Set(bindings.map(b=>b.name)).size === bindings.length,
+    'Web binding names must be unique');
+  const byName=new Map(bindings.map(b=>[b.name,b]));
+  const verified=[];
+  for(const [name,text] of Object.entries(expected.vars)) {
+    const binding=byName.get(name);
+    requireThat(binding?.type==='plain_text' && binding.text===text,`Web variable mismatch: ${name}`);
+    verified.push({name,type:'plain_text',text});
+  }
+  for(const d of expected.d1_databases) {
+    const binding=byName.get(d.binding);
+    requireThat(binding?.type==='d1' && binding.id===d.database_id,'Web D1 mismatch');
+    verified.push({name:d.binding,type:'d1',id:d.database_id});
+  }
+  const runtime=byName.get('FEED_RUNTIME');
+  // Actual production binding readbacks omit environment for the default service.
+  // Explicit production is equivalent; a staging environment or custom entrypoint is not.
+  requireThat(runtime?.type==='service' && runtime.service===production.runtimeWorker &&
+    (runtime.environment===undefined || runtime.environment==='production') &&
+    (runtime.entrypoint===undefined || runtime.entrypoint==='default'),'Web runtime binding mismatch');
+  verified.push({name:'FEED_RUNTIME',type:'service',service:production.runtimeWorker,environment:runtime.environment??'production',entrypoint:runtime.entrypoint??'default'});
+  for(const name of expected.secrets.required) {
+    requireThat(byName.get(name)?.type==='secret_text',`Web credential absent: ${name}`);
+    verified.push({name,type:'secret_text'});
+  }
+  const after=activeWebDeployment(await api('/workers/scripts/ghfind/deployments'));
+  requireThat(after.deploymentId===active.deploymentId && after.versionId===active.versionId,'Web deployment changed during readback');
+  return {format:'ghfind-feed-production-web-v1',status:'passed',sourceSha:sha,worker:'ghfind',
+    deploymentId:active.deploymentId,workerVersionId:active.versionId,mode,backend:'go',store:'cf_d1_r2',
+    bindingSHA256:createHash('sha256').update(JSON.stringify(verified)).digest('hex'),
+    observedAt:new Date().toISOString(),runId:process.env.GITHUB_RUN_ID,
+    notProven:['public domain routing and preview exposure','OAuth session and authenticated gateway journey']};
 }
+
 async function main() {
   const [cmd,...args]=process.argv.slice(2);
   if(cmd==='resources' && args.length===2) {const r=await ensureResources(JSON.parse(readFileSync(args[0])));writeFileSync(args[1],JSON.stringify(r,null,2),{flag:'wx'});}
