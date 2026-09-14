@@ -41,6 +41,9 @@ receipts and actual repository protection. The workflow then:
    identities from direct Application details (`containers info`), not the
    dashboard list's potentially delayed version/image. List responses discover
    unique IDs only; direct details govern subsequent and final identity checks.
+   Application health counters/errors are sanitized diagnostics, not versioned
+   readiness gates; every fixed actor must still prove native running and the
+   exact compiled Go build with real dependency readiness.
    The predeployment capture reads at most three metadata responses within 60s
    and stores only name, UUID, version and digest. During bounded convergence only that exact preceding identity may
    remain pending; acceptance always requires the expected new image. Once the

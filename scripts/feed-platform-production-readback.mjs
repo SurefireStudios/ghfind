@@ -102,8 +102,8 @@ function directApplication(raw) {
       (k) => !Object.hasOwn(counts, k) || countValid(k),
     );
   // Pinned Wrangler 4.129.1 derives these states from the same direct health
-  // counters. Errors are additionally fail-closed; raw error/config text is never
-  // emitted. Zero active instances is legitimate idle, not evidence of startup.
+  // counters for display only. These unversioned telemetry aggregates do not
+  // prove current actor readiness. Raw error/config text is never emitted.
   const state = !valid
     ? "unknown"
     : h.errors?.length || counts.failed > 0
@@ -143,8 +143,6 @@ function inspectApplication(apps, name, image, prior, previous) {
     reason = "application_identity_invalid";
   else if (previous && app.id !== previous.id)
     reason = "application_identity_changed";
-  else if (!["active", "ready", "provisioning"].includes(app.state))
-    reason = "application_health_rejected";
   else if (app.image !== image) {
     if (
       !prior &&
@@ -180,8 +178,8 @@ function inspectApplication(apps, name, image, prior, previous) {
   return {
     app,
     matches,
-    status: app.state === "provisioning" ? "pending" : "converged",
-    reason: app.state === "provisioning" ? "application_provisioning" : null,
+    status: "converged",
+    reason: null,
   };
 }
 function observedApplications(matches, name) {
@@ -712,7 +710,7 @@ export async function verifyDeployment(
             })),
         });
         throw new Error(
-          `immutable application identity or health summary differs: ${reason}`,
+          `immutable application identity differs: ${reason}`,
         );
       }
       ids.add(app.id);
@@ -795,7 +793,7 @@ export async function verifyDeployment(
       }
       if (verdict.status === "rejected") {
         readFailure ??= new Error(
-          `immutable application identity or health summary differs: ${verdict.reason}`,
+          `immutable application identity differs: ${verdict.reason}`,
         );
         continue;
       }
@@ -918,8 +916,8 @@ export async function verifyDeployment(
       }
     })();
     stage = "application_convergence";
-    // Identity and health share seven paired direct reads and the same 60s
-    // deadline, including discovery/startup. Cold idle is not an instance proof.
+    // Only exact previous-image identity may await convergence. Aggregate health
+    // remains diagnostic; each fixed actor must independently prove readiness.
     const settled = await convergeApplications(
       applicationConvergence,
       false,
