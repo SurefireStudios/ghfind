@@ -685,6 +685,16 @@ export async function waitAssessment(path, output, options = {}) {
   check(initial, "assessment_receipt_required");
   let r = validateReceipt(initial);
   const now = options.now ?? Date.now;
+  // Older journals could persist delivery before persisting the projection
+  // anchor. Recover from that durable observation before selecting a window;
+  // a restart must never grant another 180 seconds.
+  if (
+    r.projectionStartedAt === undefined &&
+    r.relayDeliveredObservedAt !== undefined
+  ) {
+    r.projectionStartedAt = r.relayDeliveredObservedAt;
+    await save(path, r);
+  }
   const sourceCompleted =
     r.completionObservedAt !== undefined ||
     r.status === "completed" ||
@@ -926,6 +936,7 @@ export async function waitAssessment(path, output, options = {}) {
         }
       }
       r.relayDeliveredObservedAt = c.now();
+      r.projectionStartedAt = r.relayDeliveredObservedAt;
       await save(path, r);
     }
     r.projectionStartedAt ??= c.now();

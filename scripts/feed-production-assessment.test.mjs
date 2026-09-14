@@ -1269,3 +1269,77 @@ test("malformed durable bootstrap state fails before network and cannot reset sl
     assert.equal(h.calls.length, before);
   }
 });
+
+for (const elapsed of [10000, 180001, LIMITS.waitMs + 1]) {
+  test(`legacy delivery-only checkpoint resumes its original projection window after ${elapsed}ms`, async (t) => {
+    const h = await harness(t, { rows: [run({ status: "completed" })] });
+    await startAssessment(SHA, h.receipt, h.options);
+    const r = await h.read();
+    // Simulate interruption between the two saves used by the old release.
+    Object.assign(r, {
+      phase: "waiting",
+      status: "completed",
+      waitStartedAt: h.clock,
+      completionObservedAt: h.clock,
+      relayDeliveredObservedAt: h.clock,
+    });
+    assert.equal(r.projectionStartedAt, undefined);
+    await writeFile(h.receipt, JSON.stringify(r));
+    h.clock += elapsed;
+    const result = await waitAssessment(h.receipt, h.result, h.options);
+    assert.equal(
+      (await h.read()).projectionStartedAt,
+      r.relayDeliveredObservedAt,
+    );
+    assert.equal((await h.read()).waitStartedAt, r.waitStartedAt);
+    assert.equal(
+      result.verification,
+      elapsed < LIMITS.projectionWaitMs
+        ? "normal_projection_window"
+        : "readonly_terminal_revalidation",
+    );
+    assert.equal(
+      result.projectionPolls,
+      elapsed < LIMITS.projectionWaitMs ? 1 : 0,
+    );
+    assert.equal(
+      result.terminalRevalidations,
+      elapsed < LIMITS.projectionWaitMs ? 0 : 1,
+    );
+    assert.equal(reads(h, "projection").length, 1);
+    assert.equal(reads(h, "execution").length, 0);
+    assert.equal(h.polls, 0);
+    assert.equal(h.posts, 0);
+  });
+}
+
+test("delivery and projection anchors are persisted together before a failed first projection read", async (t) => {
+  let interrupted = true;
+  const h = await harness(t, {
+    rows: [run({ status: "completed" })],
+    beforeQuery: async (kind, state) => {
+      if (kind !== "projection" || !interrupted) return;
+      const checkpoint = JSON.parse(await readFile(state.receipt, "utf8"));
+      assert.equal(checkpoint.relayDeliveredObservedAt, 100000);
+      assert.equal(
+        checkpoint.projectionStartedAt,
+        checkpoint.relayDeliveredObservedAt,
+      );
+      interrupted = false;
+      throw new Error("fixture_projection_interrupted");
+    },
+  });
+  await startAssessment(SHA, h.receipt, h.options);
+  await assert.rejects(
+    waitAssessment(h.receipt, h.result, h.options),
+    /fixture_projection_interrupted/,
+  );
+  h.clock += LIMITS.projectionWaitMs + 1;
+  const result = await waitAssessment(h.receipt, h.result, h.options);
+  assert.equal(result.verification, "readonly_terminal_revalidation");
+  assert.equal(result.projectionPolls, 1); // Interrupted read still consumes its slot.
+  assert.equal(result.terminalRevalidations, 1);
+  assert.equal((await h.read()).projectionStartedAt, 100000);
+  assert.equal(h.polls, 0);
+  assert.equal(h.posts, 0);
+});
