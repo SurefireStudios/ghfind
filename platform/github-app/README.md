@@ -2,9 +2,44 @@
 
 **English** · [中文](./README.zh.md) · [Project README](../../README.md)
 
-A hosted GitHub App that initializes five repository labels and labels and comments on opened issues and PRs
-(including drafts) using the author's public ghfind score. It uses installation
-tokens, so GitHub records the App's own bot identity and avatar.
+**Your review time is scarce. Make every first look more informed.**
+
+A busy queue should not mean opening every author's profile by hand. ghfind Review
+adds a public-profile score label and a concise profile comment to each new issue
+and PR, including drafts. You get source context where you already work, so you
+can prioritize attention and investigate unfamiliar sources before a deep review.
+
+[**Install ghfind Review on your first repository**](https://github.com/apps/ghfind-review/installations/new)
+
+## Turn score bands into a review queue
+
+Use the five `review-level:` labels to define your team's triage policy. Lower bands
+stay visually quiet; orange and gold make higher bands easier to spot. Each bot
+comment includes the profile URL, exact score and interval, so maintainers can
+follow the evidence without repeating the same account lookup.
+
+Paste these filters into your repository's Issues or Pull requests search:
+
+| Review queue                           | GitHub search                                |
+| -------------------------------------- | -------------------------------------------- |
+| Open PRs with a high profile score     | `is:open is:pr label:"review-level: high"`   |
+| Open PRs in the highest band           | `is:open is:pr label:"review-level: xhigh"`  |
+| Low-band issues needing a source check | `is:open is:issue label:"review-level: low"` |
+| Missing scores needing manual context  | `is:open label:"review-level: unavailable"`  |
+
+Start with a queue that fits your available review time. Use low and unavailable
+bands as a prompt to inspect the source and submission before spending more time;
+use higher bands to find authors with stronger public-profile signals. This gives
+you a practical first screening step for potentially low-quality incoming work.
+
+The thresholds are currently fixed at **40, 70 and 90**; per-repository threshold
+configuration is not available. You choose how to handle each band using GitHub
+filters and your team's process. The App labels and comments; it does not block,
+close or reject issues/PRs. The score measures the author's public profile, not
+the submission's quality, and a new contributor may have a limited public record.
+
+Missing labels are initialized automatically. All actions use the independent
+**`ghfind-review[bot]`** identity and ghfind avatar.
 
 ## Install
 

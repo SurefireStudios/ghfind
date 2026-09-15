@@ -2,9 +2,39 @@
 
 [English](./README.md) · **中文** · [项目 README](../../README.zh.md)
 
-ghfind Review 是托管的 GitHub App。它根据作者的公开 ghfind 评分，为**新建 issue
-和 PR（包括草稿 PR）**添加彩色等级标签，并评论作者 profile 链接、分数及所在区间。
-操作由独立账号 **`ghfind-review[bot]`** 完成，使用 ghfind 专属头像。
+**维护时间有限，别让每一次审查都从查账号开始。**
+
+ghfind Review 根据作者的公开 ghfind 评分，为**新建 issue 和 PR（包括草稿 PR）**
+添加彩色等级标签，并评论作者 profile 链接、分数及所在区间。
+来源背景直接呈现在贡献旁边，帮你先分清处理顺序，再决定在哪里投入深入审查的时间。
+
+[**为第一个仓库安装 ghfind Review**](https://github.com/apps/ghfind-review/installations/new)
+
+## 把分数区间变成你的审查队列
+
+用五个 `review-level:` 标签制定团队的分层处理规则：低分段低调显示，
+高分段用亮橙、金色吸引注意。评论提供 profile URL、准确分数和区间，
+需要进一步判断时直接点开，减少维护者重复查账号的工作。
+
+在仓库的 Issues 或 Pull requests 搜索框粘贴以下筛选条件：
+
+| 审查队列                       | GitHub 搜索条件                              |
+| ------------------------------ | -------------------------------------------- |
+| 高分段待处理 PR                | `is:open is:pr label:"review-level: high"`   |
+| 最高分段待处理 PR              | `is:open is:pr label:"review-level: xhigh"`  |
+| 需要复核来源的低分段 issue     | `is:open is:issue label:"review-level: low"` |
+| 需要人工补充背景的评分不可用项 | `is:open label:"review-level: unavailable"`  |
+
+从适合你当前精力的队列开始。低分或评分不可用时，先复核来源和提交内容；
+高分段则帮助你定位公开 profile 信号较强的作者。
+让潜在低质量来源的提交先经过一轮筛查，减少无差别逐项排查的维护压力。
+
+当前阈值固定为 **40、70、90**，尚不支持按仓库自定义阈值。
+你可以通过 GitHub 标签筛选和团队流程决定各区间如何处理。
+App 负责打标和评论，不会自动拦截、关闭或拒绝 issue/PR。
+评分反映作者的公开 profile，不代表这次提交的质量；新贡献者可能只是公开记录较少。
+
+缺失标签会自动初始化。操作由独立账号 **`ghfind-review[bot]`** 完成，使用 ghfind 专属头像。
 
 ## 安装与首次使用
 

@@ -48,11 +48,23 @@ ghfind 不只负责打分，更是一台开发者发现引擎。你可以通过�
 
 评分核心来自开源 Claude 技能 `github-account-value`。网站把它的 Python 打分逻辑 **逐行移植成 TypeScript**，并用单元测试锁定二者输出一致。
 
-## GitHub App：自动标记 issue 和 PR
+## GitHub App：少一点排查来源，多一点时间维护项目
 
-安装 **ghfind Review** 后，新建 issue 和 PR 会按作者的公开 ghfind 评分自动打上
-彩色等级标签，并收到包含 profile 链接、分数和分数区间的评论。
-App 会自动补齐标签，无需在仓库添加 workflow 或 secret。
+**每一条 issue 和 PR 都在争取你的注意力。投入审查前，先看清作者的公开贡献背景。**
+
+安装 **ghfind Review**，为新建 issue 和 PR 加一道自动来源筛查：
+彩色评分标签帮你整理待办队列，bot 评论直接提供作者的 profile 链接、分数和区间。
+不用逐个打开账号查背景，把有限的维护时间留给更需要你深入审查的贡献。
+
+- **按区间安排审查优先级。** 用 `review-level:` 标签筛选 issue 和 PR，为团队制定分层处理规则。
+- **让更强的 profile 信号更醒目。** 低分段用灰白、浅蓝弱化显示，高分段用亮橙、金色突出，扫一眼就能定位。
+- **在深入审查前先筛查来源。** 将低分或评分不可用的提交纳入人工来源复核队列，辅助应对潜在低质量来源的 issue 和 PR，减少反复排查的负担。
+
+当前分档阈值固定为 40、70、90。标签用于筛选，App 不会自动拦截或关闭提交。
+账号评分是审查线索，不能直接证明贡献质量；新贡献者同样值得认真对待。
+
+**从一个仓库开始，让下一条 issue 或 PR 自带来源背景。**
+App 自动补齐标签，无需在仓库添加 workflow 或 secret。
 
 [**安装 GitHub App**](https://github.com/apps/ghfind-review/installations/new) ·
 [**中文安装与使用指南**](./platform/github-app/README.zh.md) ·
