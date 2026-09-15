@@ -10,7 +10,7 @@ Start with a brutally honest **0–100 value & trust score** on any public GitHu
 
 **English** · [中文](./README.zh.md)
 
-[**🔍 Score a GitHub profile**](https://ghfind.com/en) · [**🏆 Discover top developers**](https://ghfind.com/en/leaderboard) · [**⭐ View source**](https://github.com/hikariming/ghfind)
+[**🔍 Score a GitHub profile**](https://ghfind.com/en) · [**🏆 Discover top developers**](https://ghfind.com/en/leaderboard) · [**🤖 Install GitHub Bot**](https://github.com/apps/ghfind-review/installations/new) · [**⭐ View source**](https://github.com/hikariming/ghfind)
 
 </div>
 
