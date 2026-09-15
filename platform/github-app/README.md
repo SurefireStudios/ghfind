@@ -58,7 +58,7 @@ the contract changes.
 
 ```sh
 cd platform/github-app
-pnpm install --ignore-workspace --frozen-lockfile
+pnpm install --frozen-lockfile
 pnpm types
 pnpm typecheck
 pnpm test
