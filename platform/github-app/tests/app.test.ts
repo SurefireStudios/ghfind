@@ -425,11 +425,42 @@ describe("GitHub App delivery", () => {
         method: "POST",
         body: JSON.stringify({
           name: LABELS[4],
-          color: "ededed",
+          color: "c3c7ce",
           description: "ghfind author score unavailable (not zero)",
         }),
       })
       .reply(201, "{}");
+    await runJob(testEnv, "job-1");
+    expect((await job())?.state).toBe("done");
+  });
+  it("upgrades legacy bot colors while preserving customized labels", async () => {
+    await add("job-1", "initialize");
+    scope();
+    intercept(
+      `/repos/${repo}/labels?per_page=100&page=1`,
+      LABELS.map((name, i) => ({
+        name,
+        color: i === 1 ? "123456" : "ededed",
+        description:
+          i === 4
+            ? "ghfind author score unavailable (not zero)"
+            : "ghfind author score; see https://ghfind.com",
+      })),
+    );
+    for (const [i, color] of [
+      [0, "d9dee3"],
+      [2, "ff922b"],
+      [3, "ffc400"],
+      [4, "c3c7ce"],
+    ] as const)
+      fetchMock
+        .get(api)
+        .intercept({
+          path: `/repos/${repo}/labels/${encodeURIComponent(LABELS[i])}`,
+          method: "PATCH",
+          body: JSON.stringify({ color }),
+        })
+        .reply(200, "{}");
     await runJob(testEnv, "job-1");
     expect((await job())?.state).toBe("done");
   });

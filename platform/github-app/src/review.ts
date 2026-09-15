@@ -9,6 +9,17 @@ export const LABELS = [
   "review-level: unavailable",
 ] as const;
 export type Label = (typeof LABELS)[number];
+export const LABEL_COLORS: Record<Label, string> = {
+  "review-level: low": "d9dee3",
+  "review-level: medium": "b6dfff",
+  "review-level: high": "ff922b",
+  "review-level: xhigh": "ffc400",
+  "review-level: unavailable": "c3c7ce",
+};
+const labelDescription = (name: Label) =>
+  name === LABELS[4]
+    ? "ghfind author score unavailable (not zero)"
+    : "ghfind author score; see https://ghfind.com";
 export function scoreToLabel(score: unknown): Label {
   if (
     typeof score !== "number" ||
@@ -52,6 +63,15 @@ export async function initializeLabels(
     if (existing.has(name)) {
       if (existing.get(name)?.archived === true)
         throw new Error(`Unarchive repository label: ${name}`);
+      // Upgrade only our original all-grey defaults; preserve owner customization.
+      const label = existing.get(name)!;
+      if (
+        String(label.color).toLowerCase() === "ededed" &&
+        label.description === labelDescription(name)
+      )
+        await api(`${path}/${encodeURIComponent(name)}`, "PATCH", {
+          color: LABEL_COLORS[name],
+        });
       continue;
     }
     if (
@@ -61,11 +81,8 @@ export async function initializeLabels(
     try {
       await api(path, "POST", {
         name,
-        color: "ededed",
-        description:
-          name === LABELS[4]
-            ? "ghfind author score unavailable (not zero)"
-            : "ghfind author score; see https://ghfind.com",
+        color: LABEL_COLORS[name],
+        description: labelDescription(name),
       });
     } catch (error) {
       // An ambiguous write is retried as a complete reconciliation. A 422 can

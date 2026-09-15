@@ -225,3 +225,18 @@ Repeat verification using:
 ```sh
 node scripts/e2e.mjs verify owner/test-repository app-slug issue-or-pr-number
 ```
+
+## Label palette
+
+| Level       | Color            | Hex       |
+| ----------- | ---------------- | --------- |
+| low         | Muted light grey | `#d9dee3` |
+| medium      | Light blue       | `#b6dfff` |
+| high        | Bright orange    | `#ff922b` |
+| xhigh       | Gold             | `#ffc400` |
+| unavailable | Neutral grey     | `#c3c7ce` |
+
+Higher score levels are more visually prominent. New labels use this palette.
+Existing labels with the App's original `ededed` color and exact default
+description are upgraded during initialization (also run before labeling).
+Owner-customized colors or descriptions remain unchanged.
