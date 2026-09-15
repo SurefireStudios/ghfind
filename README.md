@@ -48,6 +48,16 @@ Every assessment can generate a live badge and light/dark developer card for you
 
 The scoring core comes from the open-source Claude skill `github-account-value`. This site **ports its Python scoring logic line-by-line into TypeScript**, with unit tests locking the two outputs in parity.
 
+## GitHub App: issue and PR review labels
+
+Install **ghfind Review** to automatically label new issues and PRs by their
+author’s public ghfind score, then post a comment with the profile link, score and score interval.
+The App creates missing labels; no workflow or repository secret is required.
+
+[**Install GitHub App**](https://github.com/apps/ghfind-review/installations/new) ·
+[**English guide**](./platform/github-app/README.md) ·
+[**中文指南**](./platform/github-app/README.zh.md)
+
 ## How it works
 
 ```

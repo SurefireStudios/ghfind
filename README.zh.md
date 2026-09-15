@@ -48,6 +48,16 @@ ghfind 不只负责打分，更是一台开发者发现引擎。你可以通过�
 
 评分核心来自开源 Claude 技能 `github-account-value`。网站把它的 Python 打分逻辑 **逐行移植成 TypeScript**，并用单元测试锁定二者输出一致。
 
+## GitHub App：自动标记 issue 和 PR
+
+安装 **ghfind Review** 后，新建 issue 和 PR 会按作者的公开 ghfind 评分自动打上
+彩色等级标签，并收到包含 profile 链接、分数和分数区间的评论。
+App 会自动补齐标签，无需在仓库添加 workflow 或 secret。
+
+[**安装 GitHub App**](https://github.com/apps/ghfind-review/installations/new) ·
+[**中文安装与使用指南**](./platform/github-app/README.zh.md) ·
+[**English guide**](./platform/github-app/README.md)
+
 ## 工作原理
 
 ```
