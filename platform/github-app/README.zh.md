@@ -202,3 +202,34 @@ node scripts/e2e.mjs verify owner/test-repository app-slug issue-or-pr-number
 
 `prepare`、`open` 会修改测试仓库；`verify` 只核对现有 issue/PR 的打标和评论。
 需要单独新建 issue 时，可在 GitHub UI 操作。
+
+## 作者评分邮件
+
+作者可进入[邮件设置](https://bot.ghfind.com/notifications)主动订阅，并选择中文或英文。
+**仅使用 GitHub 登录不会自动订阅**，必须明确勾选同意并保存。
+App 通过 **Email addresses: read** 用户权限读取本人已验证的主邮箱；仓库安装权限
+无法读取任意作者的私有绑定邮箱。不会抓取公开 profile 或 commit 邮箱替代，也不发送到 GitHub noreply 地址。
+
+新 issue/PR 完成标签和评论后，订阅者可收到分数、区间、profile URL，以及可用时的
+“超过 ghfind 已收录评分账号的比例”和站内评分排名。
+这些是**站内评分统计**，不代表该仓库的 PR 审查顺序，也不预测维护者多久回复；数据不可用时会明确说明。
+
+邮件使用独立 D1 发件队列，按仓库、issue/PR 编号和作者去重。
+每位作者每 24 小时最多尝试发送一次，全局每个 UTC 日最多 100 次。
+邮件失败不会撤回已经添加的标签或评论。发送结果不明确时记为 `uncertain`，
+不自动重发，避免重复邮件；代价是这种故障下可能漏发，需运营者核实后处理。
+
+每封邮件附带退订链接及一键退订邮件头。打开链接先确认，提交后删除加密邮箱订阅并取消待发邮件；
+已经开始发送的邮件可能仍会送达。邮箱使用 `SESSION_SECRET` 加密保存，不记录收件地址或可能包含地址的服务商错误。
+邮件事件记录保留 30 天。
+
+### 运营者启用步骤
+
+1. 使用 Wrangler D1 migrations 应用 `0002_author_email.sql`。
+2. 在 GitHub App 的 **Account permissions** 中增加 **Email addresses: read**。
+   作者必须本人授权，仓库 owner 不能代其同意。
+3. 启用发信子域名，例如 `wrangler email sending enable mail.example.com`，验证 SPF、DKIM、DMARC，
+   将 `EMAIL_FROM` 设为该域名的发件地址。
+4. 配置 `EMAIL` binding，完成授权及自有收件邮箱 E2E 后再设 `EMAIL_ENABLED=true`；默认关闭。
+5. 定时任务处理发件队列。通过 `author_emails.state` 检查不确定发送，通过 `email_daily_budget` 检查额度。
+   暂停 bot 也会暂停发信。

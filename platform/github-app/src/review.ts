@@ -144,8 +144,13 @@ export async function syncComment(
   login: string,
   score: unknown,
   appSlug: string,
+  emailEnabled = false,
 ) {
-  const body = scoreComment(login, score);
+  const body =
+    scoreComment(login, score) +
+    (emailEnabled
+      ? "\n\n[Get your score and ghfind ranking by email / 订阅作者评分邮件](https://bot.ghfind.com/notifications) (optional / 自愿订阅)."
+      : "");
   const path = `/repos/${repository}/issues/${number}/comments`;
   // Check ownership as well as the marker: quoted/spoofed user comments are never edited.
   for (let page = 1; page <= 100; page++) {

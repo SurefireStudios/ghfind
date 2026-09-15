@@ -29,6 +29,7 @@ vi.mock("@/lib/rank", () => ({
 vi.mock("@/lib/redis", () => ({
   checkRateLimit: mocks.checkRateLimit,
   coalesceScan: mocks.coalesceScan,
+  getCachedScoreDetail: (_handle: string, load: () => unknown) => load(),
   getCachedScan: mocks.getCachedScan,
   rateLimitHeaders: mocks.rateLimitHeaders,
 }));

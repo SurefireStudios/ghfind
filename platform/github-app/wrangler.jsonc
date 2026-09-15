@@ -19,12 +19,15 @@
     "run_worker_first": true,
   },
   "vars": {
+    "EMAIL_ENABLED": "false",
+    "EMAIL_FROM": "notifications@mail.ghfind.com",
     "APP_ID": "",
     "APP_SLUG": "",
     "APP_CLIENT_ID": "",
     "ENABLED": "false",
     "ALLOWED_ACCOUNTS": "AsperforMias",
   },
+  "send_email": [{ "name": "EMAIL" }],
   "services": [
     {
       "binding": "SCORE",
@@ -68,12 +71,15 @@
     "production": {
       "name": "ghfind-bot",
       "vars": {
+        "EMAIL_ENABLED": "false",
+        "EMAIL_FROM": "notifications@mail.ghfind.com",
         "APP_ID": "4950248",
         "APP_SLUG": "ghfind-review",
         "APP_CLIENT_ID": "Iv23liwemvbc0Ld4xctK",
         "ENABLED": "true",
         "ALLOWED_ACCOUNTS": "*",
       },
+      "send_email": [{ "name": "EMAIL" }],
       "services": [
         {
           "binding": "SCORE",

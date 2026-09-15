@@ -1,0 +1,264 @@
+import { env } from "cloudflare:test";
+import { beforeAll, beforeEach, afterEach, expect, it, vi } from "vitest";
+import {
+  authorEmail,
+  scoreContext,
+  verifiedEmail,
+  enqueueAuthorEmail,
+  sendAuthorEmails,
+} from "../src/author-email";
+import { seal } from "../src/secrets";
+import { ui } from "../src/ui";
+declare const TEST_SQL: string[];
+const e = env as Env;
+const payload = {
+  login: "octocat",
+  repository: "owner/repo",
+  number: 1,
+  kind: "PR" as const,
+  score: 82.7,
+  percentile: { beat: 91.2, total: 1000, rank: 88 },
+  installation: 1,
+  repositoryId: 2,
+};
+beforeAll(async () => {
+  for (const sql of TEST_SQL) await e.DB.prepare(sql).run();
+});
+beforeEach(async () => {
+  await e.DB.batch(
+    [
+      "author_emails",
+      "author_subscriptions",
+      "email_daily_budget",
+      "sessions",
+    ].map((t) => e.DB.prepare(`DELETE FROM ${t}`)),
+  );
+});
+afterEach(() => vi.restoreAllMocks());
+it("requires verified primary email and rejects GitHub noreply", () => {
+  expect(
+    verifiedEmail([{ email: "a@example.com", verified: true, primary: true }]),
+  ).toBe("a@example.com");
+  for (const value of [
+    [{ email: "a@example.com", primary: true, verified: false }],
+    [{ email: "a@users.noreply.github.com", primary: true, verified: true }],
+    [{ email: "a@example.com", primary: false, verified: true }],
+  ])
+    expect(verifiedEmail(value)).toBeNull();
+});
+it("does not invent percentile or rank from invalid data", () => {
+  expect(scoreContext({ final_score: 82.7 })).toEqual({
+    score: 82.7,
+    percentile: null,
+  });
+  expect(scoreContext({ final_score: 82.7, percentile: null })).toEqual({
+    score: 82.7,
+    percentile: null,
+  });
+  expect(
+    scoreContext({
+      final_score: 82.7,
+      percentile: { beat: 120, total: 100, rank: 2 },
+    }).percentile,
+  ).toBeNull();
+  expect(
+    scoreContext({
+      final_score: 82.7,
+      percentile: { beat: 80, total: 100, rank: 101 },
+    }).percentile?.rank,
+  ).toBeNull();
+  expect(
+    scoreContext({
+      final_score: null,
+      percentile: { beat: 80, total: 100, rank: 1 },
+    }),
+  ).toEqual({ score: null, percentile: null });
+});
+it("renders bilingual facts with ranking population and no review-time promise", () => {
+  const english = authorEmail(
+    payload,
+    "en",
+    "https://bot.ghfind.com/notifications/unsubscribe?token=x",
+  );
+  expect(english.text).toContain("91.2% of 1000 scored accounts");
+  expect(english.text).toContain("not the repository's PR review order");
+  expect(english.text).toContain("70 ≤ score < 90");
+  const chinese = authorEmail(
+    { ...payload, score: null, percentile: null },
+    "zh",
+    "https://example.test",
+  );
+  expect(chinese.text).toContain("不等于零分");
+  expect(chinese.text).toContain("站内排名数据暂不可用");
+  expect(
+    authorEmail(
+      { ...payload, repository: "<script>/" },
+      "en",
+      "https://example.test",
+    ).html,
+  ).not.toContain("<script>");
+});
+async function subscribe() {
+  await e.DB.prepare(
+    "INSERT INTO author_subscriptions(user_id,login,email,locale,unsubscribe,updated) VALUES(1,'octocat',?,'en',?,?)",
+  )
+    .bind(
+      await seal(e, "controlled@example.com"),
+      crypto.randomUUID(),
+      Date.now(),
+    )
+    .run();
+}
+it("queues only subscribers and deduplicates replayed subjects", async () => {
+  const enabled = { ...e, EMAIL_ENABLED: "true" };
+  await enqueueAuthorEmail(enabled, 1, payload, 2);
+  expect(
+    await e.DB.prepare("SELECT count(*) n FROM author_emails").first("n"),
+  ).toBe(0);
+  await subscribe();
+  await enqueueAuthorEmail(enabled, 1, payload, 2);
+  await enqueueAuthorEmail(enabled, 1, payload, 2);
+  expect(
+    await e.DB.prepare("SELECT count(*) n FROM author_emails").first("n"),
+  ).toBe(1);
+});
+it("sends once across concurrent drains and caps an author to one per day", async () => {
+  await subscribe();
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    Response.json({ token: "installation-token" }),
+  );
+  const send = vi.fn().mockResolvedValue({ messageId: "test" });
+  const enabled = { ...e, EMAIL_ENABLED: "true", EMAIL: { send } as SendEmail };
+  await enqueueAuthorEmail(enabled, 1, payload, 2);
+  await enqueueAuthorEmail(enabled, 1, { ...payload, number: 2 }, 2);
+  await Promise.all([sendAuthorEmails(enabled), sendAuthorEmails(enabled)]);
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(send.mock.calls[0][0].text).toContain("82.7 / 100");
+});
+it("does not resend after an ambiguous provider failure", async () => {
+  await subscribe();
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    Response.json({ token: "installation-token" }),
+  );
+  const send = vi.fn().mockRejectedValue(new Error("ambiguous response"));
+  const enabled = { ...e, EMAIL_ENABLED: "true", EMAIL: { send } as SendEmail };
+  await enqueueAuthorEmail(enabled, 1, payload, 2);
+  await sendAuthorEmails(enabled);
+  await sendAuthorEmails(enabled);
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(
+    await e.DB.prepare("SELECT state FROM author_emails").first("state"),
+  ).toBe("uncertain");
+});
+it("unsubscribe GET is safe for link scanners; POST deletes subscription and cancels mail", async () => {
+  await subscribe();
+  const token = await e.DB.prepare(
+    "SELECT unsubscribe FROM author_subscriptions",
+  ).first<string>("unsubscribe");
+  const enabled = { ...e, EMAIL_ENABLED: "true" };
+  await enqueueAuthorEmail(enabled, 1, payload, 2);
+  const url = `https://bot.ghfind.com/notifications/unsubscribe?token=${token}`;
+  expect((await ui(new Request(url), enabled)).status).toBe(200);
+  expect(
+    await e.DB.prepare("SELECT count(*) n FROM author_subscriptions").first(
+      "n",
+    ),
+  ).toBe(1);
+  await ui(new Request(url, { method: "POST" }), enabled);
+  expect(
+    await e.DB.prepare("SELECT count(*) n FROM author_subscriptions").first(
+      "n",
+    ),
+  ).toBe(0);
+  expect(
+    await e.DB.prepare("SELECT state FROM author_emails").first("state"),
+  ).toBe("cancelled");
+});
+it("requires same-origin consent and stores only an encrypted verified address", async () => {
+  const id = crypto.randomUUID();
+  await e.DB.prepare("INSERT INTO sessions(id,value,expires) VALUES(?,?,?)")
+    .bind(`session:${id}`, await seal(e, "user-token"), Date.now() + 60000)
+    .run();
+  const fetch = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async (input) => {
+      if (String(input).endsWith("/user/emails"))
+        return Response.json([
+          { email: "controlled@example.com", primary: true, verified: true },
+        ]);
+      return Response.json({ id: 1, login: "octocat" });
+    });
+  const headers = {
+    cookie: `ghfind_bot_session=${id}`,
+    origin: "https://bot.ghfind.com",
+    "content-type": "application/x-www-form-urlencoded",
+  };
+  const enabled = { ...e, EMAIL_ENABLED: "true" };
+  const url = "https://bot.ghfind.com/notifications";
+  await ui(new Request(url, { headers }), enabled);
+  expect(
+    await e.DB.prepare("SELECT count(*) n FROM author_subscriptions").first(
+      "n",
+    ),
+  ).toBe(0);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(
+    (
+      await ui(
+        new Request(url, {
+          method: "POST",
+          headers: { ...headers, origin: "https://other.test" },
+          body: `csrf=${id}&consent=yes`,
+        }),
+        enabled,
+      )
+    ).status,
+  ).toBe(403);
+  expect(
+    (
+      await ui(
+        new Request(url, { method: "POST", headers, body: `csrf=${id}` }),
+        enabled,
+      )
+    ).status,
+  ).toBe(400);
+  expect(
+    (
+      await ui(
+        new Request(url, {
+          method: "POST",
+          headers,
+          body: `csrf=${id}&consent=yes&locale=zh`,
+        }),
+        enabled,
+      )
+    ).status,
+  ).toBe(303);
+  const sub = await e.DB.prepare(
+    "SELECT email,locale FROM author_subscriptions",
+  ).first<{ email: string; locale: string }>();
+  expect(sub?.email).not.toContain("controlled@example.com");
+  expect(sub?.locale).toBe("zh");
+});
+it("stops sending when disabled, the global budget is exhausted, or access is revoked", async () => {
+  await subscribe();
+  const send = vi.fn();
+  const enabled = { ...e, EMAIL_ENABLED: "true", EMAIL: { send } as SendEmail };
+  await enqueueAuthorEmail(enabled, 1, payload, 2);
+  await sendAuthorEmails({ ...enabled, EMAIL_ENABLED: "false" });
+  expect(send).not.toHaveBeenCalled();
+  await e.DB.prepare("INSERT INTO email_daily_budget(day,used) VALUES(?,100)")
+    .bind(new Date().toISOString().slice(0, 10))
+    .run();
+  await sendAuthorEmails(enabled);
+  expect(send).not.toHaveBeenCalled();
+  expect(
+    await e.DB.prepare("SELECT state FROM author_emails").first("state"),
+  ).toBe("pending");
+  await e.DB.prepare("DELETE FROM email_daily_budget").run();
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response("", { status: 404 }),
+  );
+  await sendAuthorEmails(enabled);
+  expect(send).not.toHaveBeenCalled();
+});

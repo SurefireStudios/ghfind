@@ -1,4 +1,6 @@
-import { github, jsonRequest, record } from "./github";
+import { seal, unseal } from "./secrets";
+import { verifiedEmail } from "./author-email";
+import { github, jsonRequest, record, positive } from "./github";
 import { dispatch, Job, putJob } from "./jobs";
 
 const escape = (text: unknown) =>
@@ -12,7 +14,7 @@ const escape = (text: unknown) =>
 function html(content: string) {
   return new Response(
     `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ghfind Review Bot</title><style>
-  :root{color-scheme:light dark;--bg:#f7f4ed;--fg:#171717;--card:#fff;--border:#c9c5bd;--link:#934000}html[data-theme=dark]{--bg:#171717;--fg:#eee;--card:#242424;--border:#626262;--link:#ffac6b}@media(prefers-color-scheme:dark){html:not([data-theme=light]){--bg:#171717;--fg:#eee;--card:#242424;--border:#626262;--link:#ffac6b}}body{background:var(--bg);color:var(--fg);font:16px/1.6 system-ui;margin:auto;max-width:900px;padding:24px}nav{display:flex;justify-content:space-between;align-items:center;gap:16px}a{color:var(--link)}button,select{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--border);padding:6px 12px;border-radius:6px;cursor:pointer}button:hover,a:hover{opacity:.8}section{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;margin:20px 0;overflow-wrap:anywhere}img{vertical-align:middle;margin-right:10px}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:10px;border-bottom:1px solid var(--border)}.table{overflow:auto}:focus-visible{outline:3px solid var(--link);outline-offset:3px}footer{margin-top:32px}
+  :root{color-scheme:light dark;--bg:#f7f4ed;--fg:#171717;--card:#fff;--border:#c9c5bd;--link:#934000}html[data-theme=light]{color-scheme:light}html[data-theme=dark]{color-scheme:dark;--bg:#171717;--fg:#eee;--card:#242424;--border:#626262;--link:#ffac6b}@media(prefers-color-scheme:dark){html:not([data-theme=light]){--bg:#171717;--fg:#eee;--card:#242424;--border:#626262;--link:#ffac6b}}body{background:var(--bg);color:var(--fg);font:16px/1.6 system-ui;margin:auto;max-width:900px;padding:24px}nav{display:flex;justify-content:space-between;align-items:center;gap:16px}a{color:var(--link)}button,select{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--border);padding:6px 12px;border-radius:6px;cursor:pointer}button:hover,a:hover{opacity:.8}section{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;margin:20px 0;overflow-wrap:anywhere}img{vertical-align:middle;margin-right:10px}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:10px;border-bottom:1px solid var(--border)}.table{overflow:auto}:focus-visible{outline:3px solid var(--link);outline-offset:3px}footer{margin-top:32px}
   </style><nav><a href="/"><img src="/avatar.png" width="40" height="40" alt="ghfind">ghfind Review</a><label>Theme <select id="theme" aria-label="Theme"><option value="auto">Auto</option><option value="light">Light</option><option value="dark">Dark</option></select></label></nav>${content}<footer><a href="https://github.com/hikariming/ghfind">Source & support</a> · <a href="/privacy">Privacy</a></footer><script src="/theme.js"></script></html>`,
     {
       headers: {
@@ -45,37 +47,6 @@ function redirect(url: string, cookies?: string) {
     },
   });
 }
-async function cipherKey(env: Env) {
-  return crypto.subtle.importKey(
-    "raw",
-    await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(env.SESSION_SECRET),
-    ),
-    "AES-GCM",
-    false,
-    ["encrypt", "decrypt"],
-  );
-}
-async function seal(env: Env, value: string) {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encrypted = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    await cipherKey(env),
-    new TextEncoder().encode(value),
-  );
-  return `${Buffer.from(iv).toString("base64url")}.${Buffer.from(encrypted).toString("base64url")}`;
-}
-async function unseal(env: Env, value: string) {
-  const [iv, data] = value.split(".");
-  return new TextDecoder().decode(
-    await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: Buffer.from(iv, "base64url") },
-      await cipherKey(env),
-      Buffer.from(data, "base64url"),
-    ),
-  );
-}
 async function session(request: Request, env: Env) {
   const id = cookie(request, "ghfind_bot_session");
   if (!id || !/^[a-f0-9-]{36}$/.test(id)) return null;
@@ -106,15 +77,104 @@ export async function ui(request: Request, env: Env): Promise<Response> {
     );
   if (path === "/" && request.method === "GET")
     return html(
-      `<h1>Review labels and profiles for issues and PRs.</h1><section><p>Install ghfind Review and choose repositories. We create five review-level labels, preserve your existing label settings, and label new issues and pull requests using the author's ghfind score, and post a comment with their profile, score and score interval.</p><p>${env.APP_SLUG && env.ENABLED === "true" ? `<a href="https://github.com/apps/${encodeURIComponent(env.APP_SLUG)}/installations/new">Install GitHub App</a>` : "Installation is not open yet."}</p><p>Issues and pull requests write permissions are requested. We do not read source files or run pull request code. Disable the old PR review level workflow when switching to this App.</p><p>Current rollout: ${escape(env.ALLOWED_ACCOUNTS === "*" ? "All accounts" : env.ALLOWED_ACCOUNTS)}.</p></section><section><h2>Labels</h2><p>low: 0–39.99 · medium: 40–69.99 · high: 70–89.99 · xhigh: 90–100 · unavailable: score could not be obtained.</p><p>The score describes an author's public GitHub profile; it is not a code review or a merge decision.</p></section>`,
+      `<h1>Review labels and profiles for issues and PRs.</h1><section><p>Install ghfind Review and choose repositories. We create five review-level labels, preserve your existing label settings, and label new issues and pull requests using the author's ghfind score, and post a comment with their profile, score and score interval.</p><p>${env.APP_SLUG && env.ENABLED === "true" ? `<a href="https://github.com/apps/${encodeURIComponent(env.APP_SLUG)}/installations/new">Install GitHub App</a>` : "Installation is not open yet."}</p><p>Issues and pull requests write permissions are requested. We do not read source files or run pull request code. Disable the old PR review level workflow when switching to this App.</p><p><a href="/notifications">Author email notifications / 作者邮件通知</a></p><p>Current rollout: ${escape(env.ALLOWED_ACCOUNTS === "*" ? "All accounts" : env.ALLOWED_ACCOUNTS)}.</p></section><section><h2>Labels</h2><p>low: 0–39.99 · medium: 40–69.99 · high: 70–89.99 · xhigh: 90–100 · unavailable: score could not be obtained.</p><p>The score describes an author's public GitHub profile; it is not a code review or a merge decision.</p></section>`,
     );
   if (path === "/privacy")
     return html(
-      "<h1>Privacy</h1><section><p>GitHub sends installation, issue and pull request events. We verify them and retain only installation/repository IDs, repository names, issue/PR numbers and task status. Author login is sent to ghfind to retrieve a public-profile score. Issue/PR text and code are not stored or sent for scoring. The author profile link and score are posted as a comment after labeling.</p><p>Completed task records expire after 30 days. Failed task records remain until an operator resolves them. Dashboard sessions expire after one hour; GitHub user tokens are encrypted at rest. Uninstalling the App stops repository access and leaves existing labels in place.</p><p>For deletion requests, contact the maintainers through the source repository.</p></section>",
+      "<h1>Privacy</h1><section><p>GitHub sends installation, issue and pull request events. We verify them and retain only installation/repository IDs, repository names, issue/PR numbers and task status. Author login is sent to ghfind to retrieve a public-profile score. Issue/PR text and code are not stored or sent for scoring. The author profile link and score are posted as a comment after labeling.</p><p>Completed task records expire after 30 days. Failed task records remain until an operator resolves them. Dashboard sessions expire after one hour; GitHub user tokens are encrypted at rest. Uninstalling the App stops repository access and leaves existing labels in place.</p><p>Author email subscriptions are optional. We read the verified primary email only after user authorization, encrypt it at rest, and retain it until unsubscribe. Email records retain author and submission metadata for 30 days. Unsubscribe removes the stored email and cancels pending mail; a send already in progress may complete. Delivery-uncertain messages are not automatically resent.</p><p>For deletion requests, contact the maintainers through the source repository.</p></section>",
     );
+  if (path === "/notifications/unsubscribe") {
+    const token = url.searchParams.get("token") ?? "";
+    if (!/^[a-f0-9-]{36}$/.test(token))
+      return new Response("Invalid link", { status: 400 });
+    if (request.method === "POST") {
+      await env.DB.batch([
+        env.DB.prepare(
+          "UPDATE author_emails SET state='cancelled',updated=? WHERE state='pending' AND user_id IN (SELECT user_id FROM author_subscriptions WHERE unsubscribe=?)",
+        ).bind(Date.now(), token),
+        env.DB.prepare(
+          "DELETE FROM author_subscriptions WHERE unsubscribe=?",
+        ).bind(token),
+      ]);
+      return html(
+        "<h1>Unsubscribed / 已退订</h1><p>Your email subscription has been removed. / 已删除邮箱订阅。</p>",
+      );
+    }
+    if (request.method !== "GET")
+      return new Response("Method not allowed", { status: 405 });
+    return html(
+      `<h1>Unsubscribe / 退订</h1><form method="post"><button>Stop author emails / 停止作者邮件</button></form>`,
+    );
+  }
+  if (path === "/notifications") {
+    if (env.EMAIL_ENABLED !== "true")
+      return html(
+        "<h1>Author emails / 作者邮件</h1><p>Email notifications are not enabled yet. / 邮件通知暂未开放。</p>",
+      );
+    const current = await session(request, env);
+    if (!current)
+      return html(
+        '<h1>Your ghfind score, in your inbox / 邮箱里的 ghfind 评分</h1><section><p>Subscribe to receive your score, interval and ranking among accounts indexed by ghfind when the bot processes your new issue or PR. At most one email per 24 hours. / 订阅后，bot 处理你的新 issue 或 PR 时会发送分数、区间与站内排名，每 24 小时最多一封。</p><p>GitHub authorization reads your verified primary email. Signing in alone does not subscribe you. / GitHub 授权用于读取已验证主邮箱，仅登录不会订阅。</p><a href="/login?return_to=notifications">Sign in with GitHub / 使用 GitHub 登录</a></section>',
+      );
+    const api = github(current.token);
+    const user = record(await api("/user"));
+    const userId = positive(user.id);
+    if (typeof user.login !== "string" || !/^[A-Za-z0-9-]+$/.test(user.login))
+      return new Response("Invalid user", { status: 400 });
+    if (request.method === "POST") {
+      if (request.headers.get("origin") !== url.origin)
+        return new Response("Invalid origin", { status: 403 });
+      const form = new URLSearchParams(await readTextBounded(request));
+      if (form.get("csrf") !== current.id || form.get("consent") !== "yes")
+        return new Response("Consent required", { status: 400 });
+      let email: string | null;
+      try {
+        email = verifiedEmail(await api("/user/emails"));
+      } catch {
+        return html(
+          '<h1>Email authorization needed / 需要邮箱授权</h1><p>Authorize Email addresses: read for ghfind Review, then sign in again. / 请为 ghfind Review 授权读取邮箱，然后重新登录。</p><a href="/login?return_to=notifications">Sign in again / 重新登录</a>',
+        );
+      }
+      if (!email)
+        return html(
+          "<h1>No verified primary email / 无已验证主邮箱</h1><p>Verify your primary email in GitHub settings and try again. / 请在 GitHub 设置中验证主邮箱后重试。</p>",
+        );
+      await env.DB.prepare(
+        `INSERT INTO author_subscriptions(user_id,login,email,locale,unsubscribe,updated) VALUES(?,?,?,?,?,?)
+        ON CONFLICT(user_id) DO UPDATE SET login=excluded.login,email=excluded.email,locale=excluded.locale,updated=excluded.updated`,
+      )
+        .bind(
+          userId,
+          user.login,
+          await seal(env, email),
+          form.get("locale") === "zh" ? "zh" : "en",
+          crypto.randomUUID(),
+          Date.now(),
+        )
+        .run();
+      return redirect("/notifications");
+    }
+    if (request.method !== "GET")
+      return new Response("Method not allowed", { status: 405 });
+    const sub = await env.DB.prepare(
+      "SELECT locale,unsubscribe FROM author_subscriptions WHERE user_id=?",
+    )
+      .bind(userId)
+      .first<{ locale: string; unsubscribe: string }>();
+    return html(
+      `<h1>Author email preferences / 作者邮件设置</h1><section><p>${escape(user.login)} · ${sub ? "Subscribed / 已订阅" : "Not subscribed / 未订阅"}</p><p>Receive your public-profile score and ghfind ranking for new issues/PRs. This is not a review-time estimate. / 接收新 issue 或 PR 的公开评分及站内排名，不代表审查等待时间。</p><form method="post"><input type="hidden" name="csrf" value="${current.id}"><p><label>Language / 语言 <select name="locale"><option value="en">English</option><option value="zh" ${sub?.locale === "zh" ? "selected" : ""}>中文</option></select></label></p><p><label><input type="checkbox" name="consent" value="yes" required> I agree to receive author notifications at my GitHub verified primary email, at most once per 24 hours. / 我同意通过 GitHub 已验证主邮箱接收作者通知，每 24 小时最多一封。</label></p><button>Save subscription / 保存订阅</button></form>${sub ? `<p><a href="/notifications/unsubscribe?token=${sub.unsubscribe}">Unsubscribe / 退订</a></p>` : ""}</section>`,
+    );
+  }
   if (path === "/login" && request.method === "GET") {
-    const installation = url.searchParams.get("installation_id");
-    if (!installation || !/^\d{1,16}$/.test(installation) || !env.APP_CLIENT_ID)
+    const installation =
+      url.searchParams.get("return_to") === "notifications"
+        ? "notifications"
+        : url.searchParams.get("installation_id");
+    if (
+      !installation ||
+      (installation !== "notifications" && !/^\d{1,16}$/.test(installation)) ||
+      !env.APP_CLIENT_ID
+    )
       return new Response("Invalid installation", { status: 400 });
     const state = crypto.randomUUID();
     await env.DB.prepare("INSERT INTO sessions(id,value,expires) VALUES(?,?,?)")
@@ -167,7 +227,9 @@ export async function ui(request: Request, env: Env): Promise<Response> {
       )
       .run();
     return redirect(
-      `/setup?installation_id=${row.value}`,
+      row.value === "notifications"
+        ? "/notifications"
+        : `/setup?installation_id=${row.value}`,
       cookieHeader("ghfind_bot_session", id, 3600),
     );
   }
