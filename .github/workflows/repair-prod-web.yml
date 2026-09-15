@@ -7,9 +7,16 @@ name: Repair production web (manual)
 # feed machinery, no gateway cutover, no D1 migrations) and populates the R2
 # incremental cache. It shares the production deploy concurrency group so it
 # can never run concurrently with the real release pipeline.
+# It also runs automatically whenever the real pipeline fails on main: every
+# failed release redeploys the paused anchor (new build) without populating
+# the cache, re-breaking SSG pages, so the repair must follow each failure.
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: ["Deploy production (Cloudflare)"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -21,7 +28,7 @@ concurrency:
 jobs:
   repair:
     name: Deploy paused web and populate incremental cache
-    if: ${{ github.repository == 'hikariming/ghfind' && github.ref == 'refs/heads/main' }}
+    if: ${{ github.repository == 'hikariming/ghfind' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure') }}
     environment: Production
     runs-on: ubuntu-latest
     timeout-minutes: 30
