@@ -72,7 +72,7 @@
         "APP_SLUG": "ghfind-review",
         "APP_CLIENT_ID": "Iv23liwemvbc0Ld4xctK",
         "ENABLED": "true",
-        "ALLOWED_ACCOUNTS": "AsperforMias,hikariming",
+        "ALLOWED_ACCOUNTS": "*",
       },
       "services": [
         {

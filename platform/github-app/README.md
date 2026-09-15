@@ -9,9 +9,9 @@ tokens, so GitHub records the App's own bot identity and avatar.
 The service is live at <https://bot.ghfind.com>. Install
 [ghfind Review](https://github.com/apps/ghfind-review/installations/new).
 The registered App is owned by **AsperforMias** (App ID `4950248`) and writes as
-`ghfind-review[bot]` with the ghfind avatar. During the pilot, processing is
-restricted to `AsperforMias,hikariming` by `ALLOWED_ACCOUNTS`; the landing page
-shows this restriction. Other accounts should wait until the pilot is expanded.
+`ghfind-review[bot]` with the ghfind avatar. Production processing is open to all
+accounts (`ALLOWED_ACCOUNTS=*`). Each owner must install the App and choose the
+repositories it may access.
 
 1. Follow the installation link and select repositories. Grant **Pull requests:
    read and write** and the implicit **Metadata: read** permission.
@@ -128,8 +128,9 @@ Bootstrap deployments keep `ENABLED=false` and use throwaway local credentials;
 they are not an operational GitHub App until replaced by real credentials.
 
 Enable processing only after credentials, avatar and webhook configuration are
-ready. Pilot with `ALLOWED_ACCOUNTS=AsperforMias,hikariming`; set `*` only when the
-real installation/labeling E2E passes and public onboarding is ready.
+ready. Production uses `ALLOWED_ACCOUNTS=*` after real installation/labeling E2E
+verification. For a separate restricted deployment, use a comma-separated list
+of repository owner logins.
 
 ## Observe and recover
 
