@@ -1,8 +1,45 @@
 # ghfind Review GitHub App
 
-A hosted GitHub App that initializes five repository labels and labels and comments on opened issues and PRs
-(including drafts) using the author's public ghfind score. It uses installation
-tokens, so GitHub records the App's own bot identity and avatar.
+**English** · [中文](./README.zh.md) · [Project README](../../README.md)
+
+**Your review time is scarce. Make every first look more informed.**
+
+A busy queue should not mean opening every author's profile by hand. ghfind Review
+adds a public-profile score label and a concise profile comment to each new issue
+and PR, including drafts. You get source context where you already work, so you
+can prioritize attention and investigate unfamiliar sources before a deep review.
+
+[**Install ghfind Review on your first repository**](https://github.com/apps/ghfind-review/installations/new)
+
+## Turn score bands into a review queue
+
+Use the five `review-level:` labels to define your team's triage policy. Lower bands
+stay visually quiet; orange and gold make higher bands easier to spot. Each bot
+comment includes the profile URL, exact score and interval, so maintainers can
+follow the evidence without repeating the same account lookup.
+
+Paste these filters into your repository's Issues or Pull requests search:
+
+| Review queue                           | GitHub search                                |
+| -------------------------------------- | -------------------------------------------- |
+| Open PRs with a high profile score     | `is:open is:pr label:"review-level: high"`   |
+| Open PRs in the highest band           | `is:open is:pr label:"review-level: xhigh"`  |
+| Low-band issues needing a source check | `is:open is:issue label:"review-level: low"` |
+| Missing scores needing manual context  | `is:open label:"review-level: unavailable"`  |
+
+Start with a queue that fits your available review time. Use low and unavailable
+bands as a prompt to inspect the source and submission before spending more time;
+use higher bands to find authors with stronger public-profile signals. This gives
+you a practical first screening step for potentially low-quality incoming work.
+
+The thresholds are currently fixed at **40, 70 and 90**; per-repository threshold
+configuration is not available. You choose how to handle each band using GitHub
+filters and your team's process. The App labels and comments; it does not block,
+close or reject issues/PRs. The score measures the author's public profile, not
+the submission's quality, and a new contributor may have a limited public record.
+
+Missing labels are initialized automatically. All actions use the independent
+**`ghfind-review[bot]`** identity and ghfind avatar.
 
 ## Install
 
@@ -16,12 +53,41 @@ repositories it may access.
 1. Follow the installation link and select repositories. Grant **Issues: read and write**, **Pull requests:
    read and write** and the implicit **Metadata: read** permission.
 2. The App automatically creates missing `review-level: low`, `medium`, `high`,
-   `xhigh`, and `unavailable` labels. Existing colors/descriptions are preserved.
+   `xhigh`, and `unavailable` labels. Owner-customized colors/descriptions are preserved;
+   original bot-owned grey defaults are upgraded to the palette below.
    Archived labels and case conflicts are reported for the owner to fix.
 3. The installation setup page offers GitHub sign-in to view accessible
    repository jobs. Retrying a failed repository job requires repository admin
    permission. Sign-in is optional for automatic labeling.
-4. Disable the old `PR review level` Actions workflow when migrating from #288.
+4. Open a new issue or PR (drafts and empty descriptions are supported). Processing
+   is asynchronous; wait for the queue, then refresh. Confirm the label and comment
+   are authored by `ghfind-review[bot]`.
+5. If your repository already uses the old `PR review level` Actions workflow,
+   disable it before switching to this App to avoid duplicate processing.
+
+You do not need to add a workflow, personal access token or secret to your repository.
+For personal repositories, installation is managed by the account owner; organization
+installations may require an organization owner to approve the request.
+
+### Existing installation: accept Issues permission
+
+Open [GitHub Settings → Applications → Installed GitHub Apps](https://github.com/settings/installations),
+select **Configure** for ghfind Review, then **Review request → Accept new permissions**
+if prompted. Issues read/write access is required alongside Pull requests read/write.
+New installations request both automatically.
+
+### Troubleshooting and removal
+
+| Symptom                            | What to check                                                                                                                                                                                             |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No labels or comment               | Confirm the App is installed on this repository, the object was created after installation, and required permissions were accepted. Open the installation's setup page and sign in to inspect job status. |
+| Initialization fails               | Check for archived labels or conflicting capitalization; fix them in the repository's Labels page, then use **Retry (admin)** on the setup page.                                                          |
+| `unavailable`                      | The score is missing, invalid or could not be retrieved within the retry budget. It is not zero. A completed job is not automatically rescored.                                                           |
+| No additional comment after replay | Expected: the App reconciles its existing comment rather than adding another.                                                                                                                             |
+| Want to stop processing            | Remove the repository from the App installation, suspend it or uninstall it. Existing labels and comments remain.                                                                                         |
+
+The setup page is reached from the App installation flow/settings; it requires GitHub
+sign-in for status visibility. Only repository admins may retry failed jobs.
 
 The score thresholds match PR #288 at `f72a4b3`: 40, 70 and 90. A score outside
 0–100, a missing score or exhausted score retries produces `unavailable`, never
@@ -54,7 +120,7 @@ Existing issues/PRs are not retroactively processed merely by updating the App.
 - Score reads use the `SCORE` service binding to the existing `ghfind` Worker.
 
 The labeling contract was ported from #288; the CLI implementation is not
-imported because that PR is not merged and its Node entry point/internal retry
+imported because that PR was closed in favor of this App and its Node entry point/internal retry
 loop do not fit queue execution. Keep the threshold/label fixtures aligned if
 the contract changes.
 
@@ -90,7 +156,7 @@ Installing into `hikariming`'s personal repositories must be completed by that
 account's owner.
 
 ```sh
-node scripts/register.mjs https://bot.ghfind.com /absolute/private/credentials.json
+node scripts/register.mjs https://bot.example.com /absolute/private/credentials.json
 ```
 
 Open the printed loopback URL, confirm the logged-in account and register the
@@ -228,13 +294,13 @@ node scripts/e2e.mjs verify owner/test-repository app-slug issue-or-pr-number
 
 ## Label palette
 
-| Level       | Color            | Hex       |
-| ----------- | ---------------- | --------- |
-| low         | Muted light grey | `#d9dee3` |
-| medium      | Light blue       | `#b6dfff` |
-| high        | Bright orange    | `#ff922b` |
-| xhigh       | Gold             | `#ffc400` |
-| unavailable | Neutral grey     | `#c3c7ce` |
+| Level       | Score interval                      | Color            | Hex       |
+| ----------- | ----------------------------------- | ---------------- | --------- |
+| low         | 0 ≤ score < 40                      | Muted light grey | `#d9dee3` |
+| medium      | 40 ≤ score < 70                     | Light blue       | `#b6dfff` |
+| high        | 70 ≤ score < 90                     | Bright orange    | `#ff922b` |
+| xhigh       | 90 ≤ score ≤ 100                    | Gold             | `#ffc400` |
+| unavailable | No valid score; no numeric interval | Neutral grey     | `#c3c7ce` |
 
 Higher score levels are more visually prominent. New labels use this palette.
 Existing labels with the App's original `ededed` color and exact default

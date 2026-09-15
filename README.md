@@ -48,6 +48,30 @@ Every assessment can generate a live badge and light/dark developer card for you
 
 The scoring core comes from the open-source Claude skill `github-account-value`. This site **ports its Python scoring logic line-by-line into TypeScript**, with unit tests locking the two outputs in parity.
 
+## GitHub App: spend less time triaging, more time maintaining
+
+**Every issue and PR asks for your attention. Get the author's context before you invest it.**
+
+Install **ghfind Review** to give new issues and PRs an automatic source-profile check:
+color-coded score bands help you sort your queue, while a bot comment puts the author's
+profile link, score and interval right beside the contribution. Spend less time opening
+profiles one by one, and choose which submissions need a closer look first.
+
+- **Build your review queue around score bands.** Filter by `review-level:` labels and set your team's review priorities.
+- **Make stronger profile signals stand out.** Muted grey and light blue keep lower bands quiet; bright orange and gold highlight higher bands.
+- **Screen sources before deep review.** Route low or unavailable scores into a manual source-check queue to help manage potentially low-quality incoming issues and PRs.
+
+The current bands are fixed at 40, 70 and 90. Labels support triage; the App does not
+automatically block or close submissions. A profile score is a starting point for review,
+not proof of contribution quality—new contributors deserve a fair look too.
+
+**Start with one repository. Let the next issue or PR arrive with context.**
+Missing labels are created automatically; no workflow or repository secret is required.
+
+[**Install GitHub App**](https://github.com/apps/ghfind-review/installations/new) ·
+[**English guide**](./platform/github-app/README.md) ·
+[**中文指南**](./platform/github-app/README.zh.md)
+
 ## How it works
 
 ```
