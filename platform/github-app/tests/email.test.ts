@@ -200,7 +200,8 @@ it("requires same-origin consent and stores only an encrypted verified address",
   };
   const enabled = { ...e, EMAIL_ENABLED: "true" };
   const url = "https://bot.ghfind.com/notifications";
-  await ui(new Request(url, { headers }), enabled);
+  const page = await ui(new Request(url, { headers }), enabled);
+  expect(page.headers.get("Referrer-Policy")).toBe("same-origin");
   expect(
     await e.DB.prepare("SELECT count(*) n FROM author_subscriptions").first(
       "n",

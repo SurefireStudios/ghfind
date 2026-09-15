@@ -21,7 +21,8 @@ function html(content: string) {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
-        "Referrer-Policy": "no-referrer",
+        // Preserve Origin on native same-origin form POSTs; suppress cross-site referrers.
+        "Referrer-Policy": "same-origin",
         "Content-Security-Policy":
           "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
       },
