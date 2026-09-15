@@ -32,7 +32,15 @@ export default defineConfig({
   test: { include: ["tests/**/*.test.ts"], fileParallelism: false },
   define: {
     TEST_SQL: JSON.stringify(
-      unstable_splitSqlQuery(readFileSync("migrations/0001_jobs.sql", "utf8")),
+      unstable_splitSqlQuery(
+        [
+          "0001_jobs.sql",
+          "0002_author_email.sql",
+          "0003_email_delivery_receipt.sql",
+        ]
+          .map((f) => readFileSync(`migrations/${f}`, "utf8"))
+          .join("\n"),
+      ),
     ),
   },
 });

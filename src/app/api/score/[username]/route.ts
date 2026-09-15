@@ -14,6 +14,7 @@ import {
   checkRateLimit,
   coalesceScan,
   getCachedScan,
+  getCachedScoreDetail,
   rateLimitHeaders,
 } from "@/lib/redis";
 import { buildScanResult, scanErrorResponse } from "@/lib/scan-core";
@@ -185,7 +186,12 @@ export async function GET(
     );
   }
 
-  const detail = await getAccountDetail(handle);
+  let detail: AccountDetail | null;
+  try { detail = await getCachedScoreDetail(handle, () => getAccountDetail(handle)); }
+  catch (error) {
+    const { error: code, status, retry_after } = scanErrorResponse(error);
+    return json({ error: code }, status, "no-store", { "Retry-After": String(retry_after ?? 15) });
+  }
   if (detail && isCanonicalDetail(detail)) {
     return persistedScoreResponse(detail, { source: "indexed", current: true });
   }
@@ -239,7 +245,7 @@ export async function GET(
     return json(
       { error: code, message: code.replace(/_/g, " "), ...(retry_after ? { retry_after } : {}) },
       status,
-      MISS_CACHE,
+      status >= 500 ? "no-store" : MISS_CACHE,
       { ...headers, ...(retry_after ? { "Retry-After": String(retry_after) } : {}) },
     );
   }

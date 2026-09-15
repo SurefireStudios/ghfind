@@ -1,3 +1,4 @@
+import { ScanBusyError } from "./scan-protection";
 import {
   AccountNotFoundError,
   GitHubAuthRequiredError,
@@ -297,6 +298,9 @@ export function scanErrorResponse(e: unknown): {
   status: number;
   retry_after?: number;
 } {
+  if (e instanceof ScanBusyError) {
+    return { error: "scan_busy", status: 503, retry_after: 15 };
+  }
   if (e instanceof GitHubAuthRequiredError) {
     return { error: "github_token_required", status: 500 };
   }

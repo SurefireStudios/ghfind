@@ -1,3 +1,4 @@
+import { enqueueAuthorEmail, scoreContext } from "./author-email";
 import {
   ApiError,
   appJWT,
@@ -30,6 +31,7 @@ export interface Job {
   due: number;
   lease: number;
   score: string | null;
+  score_context?: string | null;
   page: number;
   result: string | null;
   updated: number;
@@ -190,6 +192,7 @@ async function processJob(env: Env, job: Job) {
           ),
         );
         score = response.final_score;
+        job.score_context = JSON.stringify(scoreContext(response));
       } catch (error) {
         if (
           error instanceof ApiError &&
@@ -209,8 +212,8 @@ async function processJob(env: Env, job: Job) {
         ? score
         : null,
     );
-    await env.DB.prepare("UPDATE jobs SET score=? WHERE id=?")
-      .bind(job.score, job.id)
+    await env.DB.prepare("UPDATE jobs SET score=?,score_context=? WHERE id=?")
+      .bind(job.score, job.score_context ?? null, job.id)
       .run();
   }
   const label = scoreToLabel(JSON.parse(job.score));
@@ -222,7 +225,25 @@ async function processJob(env: Env, job: Job) {
     user.login,
     JSON.parse(job.score),
     env.APP_SLUG,
+    env.EMAIL_ENABLED === "true",
   );
+  if (env.EMAIL_ENABLED === "true")
+    await enqueueAuthorEmail(
+      env,
+      positive(user.id),
+      {
+        login: user.login,
+        repository: fullName,
+        number: positive(job.pr),
+        installation: job.installation,
+        repositoryId: job.repository,
+        kind: pr.pull_request ? "PR" : "issue",
+        ...(job.score_context
+          ? JSON.parse(job.score_context)
+          : { score: JSON.parse(job.score), percentile: null }),
+      },
+      job.repository,
+    );
   await finish(env, job, "done", label);
 }
 export async function runJob(env: Env, id: string) {

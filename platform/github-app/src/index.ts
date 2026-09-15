@@ -1,3 +1,4 @@
+import { sendAuthorEmails } from "./author-email";
 import { positive, readText, record, repositoryName } from "./github";
 import { allowed, dispatch, putJob, runJob } from "./jobs";
 import { ui } from "./ui";
@@ -166,5 +167,6 @@ export default {
   },
   async scheduled(_controller: ScheduledController, env: Env) {
     await dispatch(env);
+    await sendAuthorEmails(env);
   },
 } satisfies ExportedHandler<Env, { id: string }>;

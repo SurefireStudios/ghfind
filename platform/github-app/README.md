@@ -306,3 +306,41 @@ Higher score levels are more visually prominent. New labels use this palette.
 Existing labels with the App's original `ededed` color and exact default
 description are upgraded during initialization (also run before labeling).
 Owner-customized colors or descriptions remain unchanged.
+
+## Author emails
+
+Authors can opt in at [Email preferences](https://bot.ghfind.com/notifications).
+GitHub sign-in alone does not subscribe them: they explicitly save consent and choose
+English or Chinese. The App reads the authenticated author's **verified primary email**
+with the GitHub App user permission **Email addresses: read**. Repository installation
+access cannot reveal an arbitrary author's private email. Public profile/commit emails
+and GitHub noreply addresses are not used as substitutes.
+
+After a new issue/PR is labeled and commented, a subscriber can receive their score,
+interval, profile URL, and—when available—their percentile and score rank among accounts
+indexed by ghfind. These are **site score statistics**, not the repository's PR review
+order or a prediction of when maintainers will respond. Missing statistics are omitted.
+
+Delivery uses an independent D1 outbox, deduplicated per repository/issue number/author.
+There is at most one attempt per author per 24 hours and 100 attempts per UTC day globally.
+Email failures do not roll back labels or comments. Ambiguous sends are marked `uncertain`
+and are not automatically resent, avoiding duplicate mail at the cost of possible missed
+notifications. Inspect these records before any manual recovery.
+
+Every email contains an unsubscribe link and one-click unsubscribe headers. Visiting the
+link asks for confirmation; submitting it removes the encrypted email subscription and
+cancels pending mail. A send already in progress may complete. Subscription email addresses
+are encrypted using `SESSION_SECRET`; providers' errors and recipient addresses are not
+logged. Email event records are retained for 30 days.
+
+### Operator setup
+
+1. Apply all pending Wrangler D1 migrations, including `0002_author_email.sql` and `0003_email_delivery_receipt.sql`.
+2. Add **Email addresses: read** under the App's **Account permissions**. Authors must
+   authorize that permission themselves; repository owners cannot consent for them.
+3. Onboard a sending subdomain, for example `wrangler email sending enable mail.example.com`,
+   and verify SPF, DKIM and DMARC records. Set `EMAIL_FROM` to an address on that domain.
+4. Configure the `EMAIL` sending binding and set `EMAIL_ENABLED=true` only when the domain,
+   user authorization and a controlled-recipient E2E test have passed. Local/staging defaults to false; the hosted production App enables it after controlled-recipient validation.
+5. Scheduled processing drains the outbox. Monitor `author_emails.state` for `uncertain`
+   results (`provider_id` records accepted sends; `error_code` contains only sanitized codes) and `email_daily_budget` for capacity. Pausing the bot also pauses email sending.
