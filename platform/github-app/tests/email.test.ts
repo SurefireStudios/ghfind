@@ -133,6 +133,11 @@ it("sends once across concurrent drains and caps an author to one per day", asyn
   await enqueueAuthorEmail(enabled, 1, { ...payload, number: 2 }, 2);
   await Promise.all([sendAuthorEmails(enabled), sendAuthorEmails(enabled)]);
   expect(send).toHaveBeenCalledTimes(1);
+  expect(
+    await e.DB.prepare(
+      "SELECT provider_id FROM author_emails WHERE state='sent'",
+    ).first("provider_id"),
+  ).toBe("test");
   expect(send.mock.calls[0][0].text).toContain("82.7 / 100");
 });
 it("does not resend after an ambiguous provider failure", async () => {

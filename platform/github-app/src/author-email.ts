@@ -1,4 +1,4 @@
-import { record, installationToken } from "./github";
+import { record, installationToken, ApiError } from "./github";
 import { scoreToLabel, LABELS } from "./review";
 import { unseal } from "./secrets";
 
@@ -240,7 +240,7 @@ export async function sendAuthorEmails(env: Env) {
       }
       const unsubscribe = `https://bot.ghfind.com/notifications/unsubscribe?token=${sub.unsubscribe}`;
       const content = authorEmail(payload, sub.locale, unsubscribe);
-      await env.EMAIL.send({
+      const receipt = await env.EMAIL.send({
         to: await unseal(env, sub.email),
         from: { email: env.EMAIL_FROM, name: "ghfind Review" },
         ...content,
@@ -250,16 +250,26 @@ export async function sendAuthorEmails(env: Env) {
         },
       });
       await env.DB.prepare(
-        "UPDATE author_emails SET state='sent',updated=? WHERE id=?",
+        "UPDATE author_emails SET state='sent',provider_id=?,updated=? WHERE id=?",
       )
-        .bind(Date.now(), row.id)
+        .bind(receipt.messageId, Date.now(), row.id)
         .run();
-    } catch {
+    } catch (error) {
       // Neither addresses nor provider exceptions (which can include recipients) are logged.
+      const candidate =
+        error && typeof error === "object" && "code" in error
+          ? error.code
+          : null;
+      const code =
+        error instanceof ApiError
+          ? `GITHUB_${error.status}`
+          : typeof candidate === "string" && /^E_[A-Z_]{1,80}$/.test(candidate)
+            ? candidate
+            : "SEND_RESULT_UNKNOWN";
       await env.DB.prepare(
-        "UPDATE author_emails SET state='uncertain',updated=? WHERE id=?",
+        "UPDATE author_emails SET state='uncertain',error_code=?,updated=? WHERE id=?",
       )
-        .bind(Date.now(), row.id)
+        .bind(code, Date.now(), row.id)
         .run();
     }
   }

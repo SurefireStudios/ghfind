@@ -335,7 +335,7 @@ logged. Email event records are retained for 30 days.
 
 ### Operator setup
 
-1. Apply `0002_author_email.sql` using Wrangler D1 migrations.
+1. Apply all pending Wrangler D1 migrations, including `0002_author_email.sql` and `0003_email_delivery_receipt.sql`.
 2. Add **Email addresses: read** under the App's **Account permissions**. Authors must
    authorize that permission themselves; repository owners cannot consent for them.
 3. Onboard a sending subdomain, for example `wrangler email sending enable mail.example.com`,
@@ -343,4 +343,4 @@ logged. Email event records are retained for 30 days.
 4. Configure the `EMAIL` sending binding and set `EMAIL_ENABLED=true` only when the domain,
    user authorization and a controlled-recipient E2E test have passed. It defaults to false.
 5. Scheduled processing drains the outbox. Monitor `author_emails.state` for `uncertain`
-   results and `email_daily_budget` for capacity. Pausing the bot also pauses email sending.
+   results (`provider_id` records accepted sends; `error_code` contains only sanitized codes) and `email_daily_budget` for capacity. Pausing the bot also pauses email sending.

@@ -225,11 +225,11 @@ App 通过 **Email addresses: read** 用户权限读取本人已验证的主邮�
 
 ### 运营者启用步骤
 
-1. 使用 Wrangler D1 migrations 应用 `0002_author_email.sql`。
+1. 使用 Wrangler D1 migrations 应用 `0002_author_email.sql` 和 `0003_email_delivery_receipt.sql` 等待执行迁移。
 2. 在 GitHub App 的 **Account permissions** 中增加 **Email addresses: read**。
    作者必须本人授权，仓库 owner 不能代其同意。
 3. 启用发信子域名，例如 `wrangler email sending enable mail.example.com`，验证 SPF、DKIM、DMARC，
    将 `EMAIL_FROM` 设为该域名的发件地址。
 4. 配置 `EMAIL` binding，完成授权及自有收件邮箱 E2E 后再设 `EMAIL_ENABLED=true`；默认关闭。
-5. 定时任务处理发件队列。通过 `author_emails.state` 检查不确定发送，通过 `email_daily_budget` 检查额度。
+5. 定时任务处理发件队列。通过 `author_emails.state` 检查不确定发送，`provider_id` 保存服务商接收回执，`error_code` 仅保存脱敏错误码；通过 `email_daily_budget` 检查额度。
    暂停 bot 也会暂停发信。
