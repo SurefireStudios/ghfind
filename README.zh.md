@@ -10,7 +10,7 @@
 
 [English](./README.md) · **中文**
 
-[**🔍 测测 GitHub 成色**](https://ghfind.com) · [**🏆 发现最佳开发者**](https://ghfind.com/leaderboard) · [**⭐ 查看源码**](https://github.com/hikariming/ghfind)
+[**🔍 测测 GitHub 成色**](https://ghfind.com) · [**🏆 发现最佳开发者**](https://ghfind.com/leaderboard) · [**🤖 安装 GitHub Bot**](https://github.com/apps/ghfind-review/installations/new) · [**⭐ 查看源码**](https://github.com/hikariming/ghfind)
 
 </div>
 
