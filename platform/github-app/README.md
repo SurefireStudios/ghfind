@@ -167,7 +167,6 @@ score, and the setup status. Redeliver the same event and ensure there is no new
 label transition. Remove repository access/uninstall and confirm no further
 writes. Unit tests and a deployed health page alone do not establish bot identity.
 
-
 Validated against the live service on 2026-09-15:
 
 - A new private test repository received all five labels automatically on install.
