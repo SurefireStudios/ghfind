@@ -51,9 +51,12 @@ export async function webhook(request: Request, env: Env): Promise<Response> {
   try {
     const payload = record(JSON.parse(body));
     if (
-      !["pull_request", "installation", "installation_repositories"].includes(
-        event ?? "",
-      )
+      ![
+        "pull_request",
+        "issues",
+        "installation",
+        "installation_repositories",
+      ].includes(event ?? "")
     )
       return new Response("Ignored");
     const install = record(payload.installation);
@@ -61,7 +64,7 @@ export async function webhook(request: Request, env: Env): Promise<Response> {
     if (install.app_id !== undefined && install.app_id !== Number(env.APP_ID))
       return new Response("Wrong app", { status: 403 });
     const account = record(
-      event === "pull_request"
+      event === "pull_request" || event === "issues"
         ? record(payload.repository).owner
         : install.account,
     );
@@ -70,7 +73,12 @@ export async function webhook(request: Request, env: Env): Promise<Response> {
       !allowed(env, `${account.login}/_`)
     )
       return new Response("Outside rollout");
-    if (event === "pull_request" && payload.action === "opened") {
+    if (
+      (event === "pull_request" || event === "issues") &&
+      payload.action === "opened"
+    ) {
+      if (event === "issues" && record(payload.issue).pull_request)
+        return new Response("Ignored PR issue event");
       const repo = record(payload.repository);
       const fullName = repositoryName(repo.full_name);
       if (!allowed(env, fullName)) return new Response("Outside rollout");
@@ -80,7 +88,9 @@ export async function webhook(request: Request, env: Env): Promise<Response> {
         kind: "label",
         repository: positive(repo.id),
         full_name: fullName,
-        pr: positive(payload.number),
+        pr: positive(
+          event === "issues" ? record(payload.issue).number : payload.number,
+        ),
       });
     } else if (
       (event === "installation" &&

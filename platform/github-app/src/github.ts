@@ -205,7 +205,7 @@ export async function installationToken(
       "POST",
       {
         ...(repository ? { repository_ids: [repository] } : {}),
-        permissions: { pull_requests: "write" },
+        permissions: { pull_requests: "write", issues: "write" },
       },
     ),
   );

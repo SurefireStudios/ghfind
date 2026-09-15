@@ -1,6 +1,6 @@
 # ghfind Review GitHub App
 
-A hosted GitHub App that initializes five repository labels and labels opened PRs
+A hosted GitHub App that initializes five repository labels and labels and comments on opened issues and PRs
 (including drafts) using the author's public ghfind score. It uses installation
 tokens, so GitHub records the App's own bot identity and avatar.
 
@@ -13,7 +13,7 @@ The registered App is owned by **AsperforMias** (App ID `4950248`) and writes as
 accounts (`ALLOWED_ACCOUNTS=*`). Each owner must install the App and choose the
 repositories it may access.
 
-1. Follow the installation link and select repositories. Grant **Pull requests:
+1. Follow the installation link and select repositories. Grant **Issues: read and write**, **Pull requests:
    read and write** and the implicit **Metadata: read** permission.
 2. The App automatically creates missing `review-level: low`, `medium`, `high`,
    `xhigh`, and `unavailable` labels. Existing colors/descriptions are preserved.
@@ -26,7 +26,8 @@ repositories it may access.
 The score thresholds match PR #288 at `f72a4b3`: 40, 70 and 90. A score outside
 0–100, a missing score or exhausted score retries produces `unavailable`, never
 an inferred zero. This is an author-profile signal, not a code-quality review or
-permission to merge. Issue-opened events are not processed.
+permission to merge. Both `issues.opened` and `pull_request.opened` are processed.
+Existing issues/PRs are not retroactively processed merely by updating the App.
 
 ## Runtime
 
@@ -100,7 +101,9 @@ until the callback succeeds; stop it afterward. Never commit the output.
 
 In App settings, upload `assets/avatar.png` (200×200, derived from the website
 icon). Confirm webhook is `/webhook`, OAuth callback `/callback`, setup `/setup`,
-Pull requests write permission and `pull_request` event subscription. GitHub
+Issues and Pull requests write permissions and both `issues` and `pull_request`
+event subscriptions. Existing installations must accept the added Issues
+permission in their GitHub installation settings. GitHub
 also delivers installation lifecycle events automatically. Keep optional OAuth
 on installation disabled: it is only needed to view the setup dashboard.
 
@@ -185,3 +188,40 @@ Validated against the live service on 2026-09-15:
 The production App is available for installation; `hikariming/ghfind` still needs
 its personal account owner's installation. This package does not install the App
 in that repository or replace its workflows merely by being merged.
+
+## Author-score comment
+
+After label reconciliation succeeds, the App creates or updates its own comment:
+
+| Profile                                              | Score      | Level                | Score interval  |
+| ---------------------------------------------------- | ---------- | -------------------- | --------------- |
+| [AsperforMias](https://ghfind.com/en/u/AsperforMias) | 82.7 / 100 | `review-level: high` | 70 ≤ score < 90 |
+
+The template is `scoreComment` in `src/review.ts`. It uses the same persisted score
+as the label. Unavailable scores show “Unavailable” with no numeric interval,
+never zero. The footer explains that this is an author-profile signal.
+
+Before posting, all comment pages are searched for the marker and this App's bot
+identity. Matching comments are updated only when the body differs; user comments
+with a copied marker are not modified. A failed label write cannot post a success
+comment. Comment failures retain the durable job for retry, which reconciles the
+label and checks existing comments before creating another. GitHub does not expose
+an idempotency key for comment creation, so reconciliation handles ambiguous
+responses rather than blindly reposting.
+
+The existing `jobs.pr` column stores either the issue or PR number: GitHub shares
+that number namespace and exposes both through the Issues API. No schema migration
+is needed for this extension.
+
+Issue/comment extension verified on the live service on 2026-09-15 in
+`AsperforMias/ghfind-bot-demo-20260915`: empty-body issue #3 and draft PR #4 each
+received one high label and one comment from `ghfind-review[bot]`, with the live
+score 82.7, a working profile URL and interval `70 ≤ score < 90`. Both real GitHub
+opened deliveries were redelivered (HTTP 202); each still had one label event and
+one score comment. Test installation 161860552 accepted Issues write permission.
+
+Repeat verification using:
+
+```sh
+node scripts/e2e.mjs verify owner/test-repository app-slug issue-or-pr-number
+```

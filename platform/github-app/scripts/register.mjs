@@ -39,15 +39,15 @@ const server = createServer(async (req, res) => {
       name: "ghfind Review",
       url: origin.origin,
       description:
-        "Automatically initialize review-level labels and label new PRs using the author’s public ghfind score.",
+        "Automatically initialize review-level labels and label and comment on new issues and PRs using the author’s public ghfind score.",
       public: true,
       hook_attributes: { url: `${origin.origin}/webhook`, active: true },
       redirect_url: "http://127.0.0.1:8789/callback",
       callback_urls: [`${origin.origin}/callback`],
       setup_url: `${origin.origin}/setup`,
       setup_on_update: true,
-      default_permissions: { pull_requests: "write" },
-      default_events: ["pull_request"],
+      default_permissions: { pull_requests: "write", issues: "write" },
+      default_events: ["pull_request", "issues"],
     };
     const encoded = JSON.stringify(manifest)
       .replaceAll("&", "&amp;")
@@ -55,7 +55,7 @@ const server = createServer(async (req, res) => {
       .replaceAll("<", "&lt;");
     return respond(
       200,
-      `<h1>Register ghfind Review</h1><p>Creates one public GitHub App under your currently selected GitHub account. Permissions: pull requests write; metadata read. Webhook: ${origin.origin}/webhook.</p><form method="post" action="https://github.com/settings/apps/new?state=${state}"><input type="hidden" name="manifest" value="${encoded}"><button>Continue to GitHub registration</button></form>`,
+      `<h1>Register ghfind Review</h1><p>Creates one public GitHub App under your currently selected GitHub account. Permissions: issues and pull requests write; metadata read. Webhook: ${origin.origin}/webhook.</p><form method="post" action="https://github.com/settings/apps/new?state=${state}"><input type="hidden" name="manifest" value="${encoded}"><button>Continue to GitHub registration</button></form>`,
     );
   }
   if (

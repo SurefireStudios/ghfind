@@ -10,9 +10,15 @@ import {
 } from "vitest";
 import worker, { verifySignature, webhook } from "../src/index";
 import { putJob, runJob, Job, dispatch } from "../src/jobs";
-import { LABELS, scoreToLabel } from "../src/review";
+import {
+  LABELS,
+  scoreToLabel,
+  scoreComment,
+  syncComment,
+  COMMENT_MARKER,
+} from "../src/review";
 import { ui } from "../src/ui";
-import { ApiError, jsonRequest, appJWT } from "../src/github";
+import { ApiError, jsonRequest, appJWT, github } from "../src/github";
 
 declare const TEST_SQL: string[];
 const testEnv = env as Env;
@@ -117,6 +123,17 @@ const intercept = (path: string, body: unknown, status = 200, method = "GET") =>
     .get(api)
     .intercept({ path, method })
     .reply(status, JSON.stringify(body));
+function commentWrite(score: unknown = 82.7) {
+  intercept(`/repos/${repo}/issues/1/comments?per_page=100&page=1`, []);
+  fetchMock
+    .get(api)
+    .intercept({
+      path: `/repos/${repo}/issues/1/comments`,
+      method: "POST",
+      body: JSON.stringify({ body: scoreComment("AsperforMias", score) }),
+    })
+    .reply(201, "{}");
+}
 function scope() {
   intercept(
     "/app/installations/10/access_tokens",
@@ -420,7 +437,7 @@ describe("GitHub App delivery", () => {
     await add();
     scope();
     intercept(`/repos/${repo}/labels?per_page=100&page=1`, labelList());
-    intercept(`/repos/${repo}/pulls/1`, {
+    intercept(`/repos/${repo}/issues/1`, {
       state: "open",
       user: { login: "AsperforMias" },
     });
@@ -435,6 +452,7 @@ describe("GitHub App delivery", () => {
       204,
       "DELETE",
     );
+    commentWrite(82.7);
     await runJob(testEnv, "job-1");
     expect((await job())?.result).toBe(LABELS[2]);
     expect((await job())?.score).toBe("82.7");
@@ -444,7 +462,7 @@ describe("GitHub App delivery", () => {
     await add();
     scope();
     intercept(`/repos/${repo}/labels?per_page=100&page=1`, labelList());
-    intercept(`/repos/${repo}/pulls/1`, {
+    intercept(`/repos/${repo}/issues/1`, {
       state: "open",
       user: { login: "AsperforMias" },
     });
@@ -452,6 +470,7 @@ describe("GitHub App delivery", () => {
       { name: LABELS[2] },
       { name: "bug" },
     ]);
+    commentWrite(82.7);
     await runJob(testEnv, "job-1");
     expect((await job())?.state).toBe("done");
   });
@@ -459,7 +478,7 @@ describe("GitHub App delivery", () => {
     await add();
     scope();
     intercept(`/repos/${repo}/labels?per_page=100&page=1`, labelList());
-    intercept(`/repos/${repo}/pulls/1`, {
+    intercept(`/repos/${repo}/issues/1`, {
       state: "open",
       user: { login: "AsperforMias" },
     });
@@ -473,13 +492,14 @@ describe("GitHub App delivery", () => {
       .run();
     scope();
     intercept(`/repos/${repo}/labels?per_page=100&page=1`, labelList());
-    intercept(`/repos/${repo}/pulls/1`, {
+    intercept(`/repos/${repo}/issues/1`, {
       state: "open",
       user: { login: "AsperforMias" },
     });
     intercept(`/repos/${repo}/issues/1/labels?per_page=100&page=1`, [
       { name: LABELS[2] },
     ]);
+    commentWrite(82.7);
     await runJob(testEnv, "job-1");
     expect((await job())?.state).toBe("done");
   });
@@ -550,7 +570,7 @@ describe("GitHub App delivery", () => {
       .run();
     scope();
     intercept(`/repos/${repo}/labels?per_page=100&page=1`, labelList());
-    intercept(`/repos/${repo}/pulls/1`, {
+    intercept(`/repos/${repo}/issues/1`, {
       state: "open",
       user: { login: "AsperforMias" },
     });
@@ -563,6 +583,7 @@ describe("GitHub App delivery", () => {
         body: JSON.stringify({ labels: [LABELS[4]] }),
       })
       .reply(200, "{}");
+    commentWrite(null);
     await runJob(testEnv, "job-1");
     expect((await job())?.result).toBe(LABELS[4]);
   });
@@ -624,5 +645,121 @@ describe("GitHub App delivery", () => {
     expect(
       (await worker.fetch(await event("pull_request", prEvent), paused)).status,
     ).toBe(503);
+  });
+});
+
+describe("Issue support and score comments", () => {
+  it("admits issue.number and ignores non-opened and PR-shaped issue events", async () => {
+    const payload = { ...prEvent, number: undefined, issue: { number: 7 } };
+    expect(
+      (await webhook(await event("issues", payload), testEnv)).status,
+    ).toBe(202);
+    expect((await job("delivery-1"))?.pr).toBe(7);
+    await webhook(
+      await event("issues", { ...payload, action: "edited" }, "edited"),
+      testEnv,
+    );
+    await webhook(
+      await event(
+        "issues",
+        { ...payload, issue: { number: 7, pull_request: {} } },
+        "pr-shaped",
+      ),
+      testEnv,
+    );
+    expect(await job("edited")).toBeNull();
+    expect(await job("pr-shaped")).toBeNull();
+  });
+  it.each([
+    [39.99, "0 ≤ score < 40"],
+    [40, "40 ≤ score < 70"],
+    [70, "70 ≤ score < 90"],
+    [90, "90 ≤ score ≤ 100"],
+    [100, "90 ≤ score ≤ 100"],
+  ])("renders exact boundary %s", (score, range) => {
+    expect(scoreComment("AsperforMias", score)).toContain(range);
+    expect(scoreComment("AsperforMias", score)).toContain(
+      "https://ghfind.com/en/u/AsperforMias",
+    );
+  });
+  it("renders unavailable without presenting a zero score", () => {
+    const body = scoreComment("AsperforMias", null);
+    expect(body).toContain("Unavailable — no score interval");
+    expect(body).not.toContain("0 / 100");
+  });
+  it("recovers an ambiguous comment creation without posting a duplicate", async () => {
+    const body = scoreComment("AsperforMias", 82.7);
+    intercept(`/repos/${repo}/issues/1/comments?per_page=100&page=1`, []);
+    intercept(`/repos/${repo}/issues/1/comments`, {}, 502, "POST");
+    await expect(
+      syncComment(
+        github("test"),
+        repo,
+        1,
+        "AsperforMias",
+        82.7,
+        "ghfind-review-test",
+      ),
+    ).rejects.toBeInstanceOf(ApiError);
+    intercept(`/repos/${repo}/issues/1/comments?per_page=100&page=1`, [
+      {
+        id: 123,
+        user: { login: "ghfind-review-test[bot]", type: "Bot" },
+        body,
+      },
+    ]);
+    await syncComment(
+      github("test"),
+      repo,
+      1,
+      "AsperforMias",
+      82.7,
+      "ghfind-review-test",
+    );
+  });
+  it("paginates, ignores spoofed user markers and updates only its own comment", async () => {
+    const fake = {
+      id: 1,
+      user: { login: "someone", type: "User" },
+      body: COMMENT_MARKER,
+    };
+    intercept(
+      `/repos/${repo}/issues/1/comments?per_page=100&page=1`,
+      Array(100).fill(fake),
+    );
+    intercept(`/repos/${repo}/issues/1/comments?per_page=100&page=2`, [
+      {
+        id: 123,
+        user: { login: "ghfind-review-test[bot]", type: "Bot" },
+        body: COMMENT_MARKER,
+      },
+    ]);
+    intercept(`/repos/${repo}/issues/comments/123`, {}, 200, "PATCH");
+    await syncComment(
+      github("test"),
+      repo,
+      1,
+      "AsperforMias",
+      82.7,
+      "ghfind-review-test",
+    );
+  });
+  it("fails before commenting when label reconciliation fails", async () => {
+    await add();
+    scope();
+    intercept(`/repos/${repo}/labels?per_page=100&page=1`, labelList());
+    intercept(`/repos/${repo}/issues/1`, {
+      state: "open",
+      user: { login: "AsperforMias" },
+    });
+    intercept(`/repos/${repo}/issues/1/labels?per_page=100&page=1`, []);
+    intercept(`/repos/${repo}/issues/1/labels`, {}, 403, "POST");
+    await runJob(testEnv, "job-1");
+    expect((await job())?.state).toBe("failed");
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.some(([url]) => String(url).includes("/comments")),
+    ).toBe(false);
   });
 });

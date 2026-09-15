@@ -8,13 +8,19 @@ import {
   record,
   repositoryName,
 } from "./github";
-import { initializeLabels, scoreToLabel, syncLabel } from "./review";
+import {
+  initializeLabels,
+  scoreToLabel,
+  syncLabel,
+  syncComment,
+} from "./review";
 
 export interface Job {
   id: string;
   installation: number;
   repository: number | null;
   full_name: string | null;
+  // GitHub issues and PRs share the same repository number namespace.
   pr: number | null;
   kind: "discover" | "initialize" | "label";
   state: string;
@@ -160,15 +166,19 @@ async function processJob(env: Env, job: Job) {
     await finish(env, job, "done", "All five labels ready");
     return;
   }
-  const pr = record(await api(`/repos/${fullName}/pulls/${job.pr}`));
+  const pr = record(await api(`/repos/${fullName}/issues/${job.pr}`));
   if (pr.state !== "open") {
-    await finish(env, job, "cancelled", "Pull request closed");
+    await finish(env, job, "cancelled", "Issue or pull request closed");
     return;
   }
+  const user = record(pr.user);
+  if (
+    typeof user.login !== "string" ||
+    !/^[A-Za-z0-9-]+(?:\[bot\])?$/.test(user.login)
+  )
+    throw new Error("Invalid author login");
   if (job.score === null) {
-    const user = record(pr.user);
     let score: unknown = null;
-    if (typeof user.login !== "string") throw new Error("Missing PR author");
     if (Date.now() < job.started + 4 * 60_000) {
       try {
         const response = record(
@@ -205,6 +215,14 @@ async function processJob(env: Env, job: Job) {
   }
   const label = scoreToLabel(JSON.parse(job.score));
   await syncLabel(api, fullName, positive(job.pr), label);
+  await syncComment(
+    api,
+    fullName,
+    positive(job.pr),
+    user.login,
+    JSON.parse(job.score),
+    env.APP_SLUG,
+  );
   await finish(env, job, "done", label);
 }
 export async function runJob(env: Env, id: string) {

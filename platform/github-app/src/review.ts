@@ -1,4 +1,4 @@
-import { ApiError, github, record } from "./github";
+import { ApiError, github, record, positive } from "./github";
 
 // Same contract as PR #288 (f72a4b3); no CLI/Node entry point in the Worker.
 export const LABELS = [
@@ -93,4 +93,69 @@ export async function syncLabel(
         if (!(error instanceof ApiError && error.status === 404)) throw error;
       }
     }
+}
+
+export const COMMENT_MARKER = "<!-- ghfind-review:author-score:v1 -->";
+export function scoreComment(login: string, score: unknown): string {
+  if (!/^[A-Za-z0-9-]+(?:\[bot\])?$/.test(login))
+    throw new Error("Invalid author login");
+  const label = scoreToLabel(score);
+  const ranges: Record<Label, string> = {
+    "review-level: low": "0 ≤ score < 40",
+    "review-level: medium": "40 ≤ score < 70",
+    "review-level: high": "70 ≤ score < 90",
+    "review-level: xhigh": "90 ≤ score ≤ 100",
+    "review-level: unavailable": "Unavailable — no score interval",
+  };
+  const available = label !== LABELS[4];
+  const author = login.replaceAll("[", "\\[").replaceAll("]", "\\]");
+  return `${COMMENT_MARKER}
+### ghfind author profile
+
+| Profile | Score | Level | Score interval |
+| --- | --- | --- | --- |
+| [${author}](https://ghfind.com/en/u/${encodeURIComponent(login)}) | ${available ? `${score} / 100` : "Unavailable"} | \`${label}\` | ${ranges[label]} |
+
+${available ? "The label reflects the author's public GitHub profile at processing time." : "The score could not be obtained. Unavailable does not mean zero."}
+This profile score is not a review of the issue or PR content, or a merge recommendation.`;
+}
+
+export async function syncComment(
+  api: ReturnType<typeof github>,
+  repository: string,
+  number: number,
+  login: string,
+  score: unknown,
+  appSlug: string,
+) {
+  const body = scoreComment(login, score);
+  const path = `/repos/${repository}/issues/${number}/comments`;
+  // Check ownership as well as the marker: quoted/spoofed user comments are never edited.
+  for (let page = 1; page <= 100; page++) {
+    const comments = await api(`${path}?per_page=100&page=${page}`);
+    if (!Array.isArray(comments)) throw new Error("Invalid comment list");
+    for (const value of comments) {
+      const comment = record(value);
+      const user = record(comment.user);
+      if (
+        user.type === "Bot" &&
+        user.login === `${appSlug}[bot]` &&
+        typeof comment.body === "string" &&
+        comment.body.startsWith(COMMENT_MARKER)
+      ) {
+        if (comment.body !== body)
+          await api(
+            `/repos/${repository}/issues/comments/${positive(comment.id)}`,
+            "PATCH",
+            { body },
+          );
+        return;
+      }
+    }
+    if (comments.length < 100) {
+      await api(path, "POST", { body });
+      return;
+    }
+  }
+  throw new Error("Comment pagination exceeded limit");
 }
