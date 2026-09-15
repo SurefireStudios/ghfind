@@ -69,7 +69,8 @@ export async function jsonRequest(
         try {
           response = await transport(url, {
             ...init,
-            redirect: "error",
+            // workerd does not support "error"; reject 3xx below without following.
+            redirect: "manual",
             signal: controller.signal,
           });
         } catch {

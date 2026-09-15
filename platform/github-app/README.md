@@ -6,9 +6,12 @@ tokens, so GitHub records the App's own bot identity and avatar.
 
 ## Install
 
-The service is at <https://bot.ghfind.com>. During rollout, installations are
-restricted by `ALLOWED_ACCOUNTS`; the page shows the current list. Installation
-is open only after the maintainer finishes registration and enables processing.
+The service is live at <https://bot.ghfind.com>. Install
+[ghfind Review](https://github.com/apps/ghfind-review/installations/new).
+The registered App is owned by **AsperforMias** (App ID `4950248`) and writes as
+`ghfind-review[bot]` with the ghfind avatar. During the pilot, processing is
+restricted to `AsperforMias,hikariming` by `ALLOWED_ACCOUNTS`; the landing page
+shows this restriction. Other accounts should wait until the pilot is expanded.
 
 1. Follow the installation link and select repositories. Grant **Pull requests:
    read and write** and the implicit **Metadata: read** permission.
@@ -65,7 +68,11 @@ pnpm test
 pnpm build
 ```
 
-Tests run inside workerd with a real local D1 and mocked external requests.
+Tests run inside workerd with a real local D1, native service-binding transport
+for the score fixture, and mocked external GitHub requests. Keep the service
+binding unmocked so runtime-specific fetch restrictions remain covered. HTTP
+redirects are handled manually and rejected as non-success responses; Workers
+does not implement `redirect: "error"`.
 Compatibility date is `2026-09-10`, the newest supported by the pinned test
 runtime. `wrangler types --strict-vars=false` keeps rollout switches string-typed.
 The separate GitHub App checks workflow runs this package on PRs and pushes.
@@ -74,8 +81,10 @@ Light, Dark and Auto in the navbar.
 
 ## Register under the maintainer account
 
-Registration is distinct from installing the App into a repository. The planned
-owner is **AsperforMias**. GitHub may require account two-factor/sudo verification.
+The production App is already registered under **AsperforMias**. Do not register
+a duplicate when deploying updates. The following procedure is for a separate
+self-hosted App. Registration is distinct from repository installation; GitHub
+may require account two-factor/sudo verification.
 Installing into `hikariming`'s personal repositories must be completed by that
 account's owner.
 
@@ -157,3 +166,22 @@ GitHub timeline's actor login/type/avatar, the applied level against the live
 score, and the setup status. Redeliver the same event and ensure there is no new
 label transition. Remove repository access/uninstall and confirm no further
 writes. Unit tests and a deployed health page alone do not establish bot identity.
+
+
+Validated against the live service on 2026-09-15:
+
+- A new private test repository received all five labels automatically on install.
+- A draft PR by `AsperforMias` received `review-level: high` for a live score of
+  **82.7**. The GitHub timeline recorded `ghfind-review[bot]` (type `Bot`) with
+  the custom avatar, not the maintainer or GitHub Actions identity.
+- GitHub redelivered the same opened event successfully (HTTP 202); the timeline
+  still contained exactly one review-label event.
+- The OAuth setup dashboard showed initialization and labeling as done. Light,
+  Dark and Auto themes were checked with actual job rows.
+- After uninstalling the test installation, the previously issued token returned
+  HTTP 401 for reads and label writes, and new token creation returned HTTP 404.
+  Existing labels remained unchanged. The disposable repository was archived.
+
+The production App is available for installation; `hikariming/ghfind` still needs
+its personal account owner's installation. This package does not install the App
+in that repository or replace its workflows merely by being merged.

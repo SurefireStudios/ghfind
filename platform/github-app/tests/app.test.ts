@@ -154,9 +154,6 @@ beforeEach(async () => {
   await testEnv.DB.exec("DELETE FROM jobs; DELETE FROM sessions;");
   fetchMock.activate();
   fetchMock.disableNetConnect();
-  vi.spyOn(testEnv.SCORE, "fetch").mockImplementation(async () =>
-    Response.json({ final_score: 82.7 }),
-  );
 });
 afterEach(() => {
   fetchMock.assertNoPendingInterceptors();

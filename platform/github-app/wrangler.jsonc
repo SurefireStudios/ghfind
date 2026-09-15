@@ -68,10 +68,10 @@
     "production": {
       "name": "ghfind-bot",
       "vars": {
-        "APP_ID": "",
-        "APP_SLUG": "",
-        "APP_CLIENT_ID": "",
-        "ENABLED": "false",
+        "APP_ID": "4950248",
+        "APP_SLUG": "ghfind-review",
+        "APP_CLIENT_ID": "Iv23liwemvbc0Ld4xctK",
+        "ENABLED": "true",
         "ALLOWED_ACCOUNTS": "AsperforMias,hikariming",
       },
       "services": [
