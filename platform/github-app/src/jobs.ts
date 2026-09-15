@@ -243,6 +243,7 @@ async function processJob(env: Env, job: Job) {
           : { score: JSON.parse(job.score), percentile: null }),
       },
       job.repository,
+      api,
     );
   await finish(env, job, "done", label);
 }

@@ -82,7 +82,7 @@ export async function ui(request: Request, env: Env): Promise<Response> {
     );
   if (path === "/privacy")
     return html(
-      "<h1>Privacy</h1><section><p>GitHub sends installation, issue and pull request events. We verify them and retain only installation/repository IDs, repository names, issue/PR numbers and task status. Author login is sent to ghfind to retrieve a public-profile score. Issue/PR text and code are not stored or sent for scoring. The author profile link and score are posted as a comment after labeling.</p><p>Completed task records expire after 30 days. Failed task records remain until an operator resolves them. Dashboard sessions expire after one hour; GitHub user tokens are encrypted at rest. Uninstalling the App stops repository access and leaves existing labels in place.</p><p>Author email subscriptions are optional. We read the verified primary email only after user authorization, encrypt it at rest, and retain it until unsubscribe. Email records retain author and submission metadata for 30 days. Unsubscribe removes the stored email and cancels pending mail; a send already in progress may complete. Delivery-uncertain messages are not automatically resent.</p><p>For deletion requests, contact the maintainers through the source repository.</p></section>",
+      "<h1>Privacy</h1><section><p>GitHub sends installation, issue and pull request events. We verify them and retain only installation/repository IDs, repository names, issue/PR numbers and task status. Author login is sent to ghfind to retrieve a public-profile score. Issue/PR text and code are not stored or sent for scoring. The author profile link and score are posted as a comment after labeling.</p><p>Completed task records expire after 30 days. Failed task records remain until an operator resolves them. Dashboard sessions expire after one hour; GitHub user tokens are encrypted at rest. Uninstalling the App stops repository access and leaves existing labels in place.</p><p>Author score emails are enabled by default when a current public GitHub profile email is available. We do not use commit emails. Users may alternatively authorize their verified primary email. Addresses are encrypted at rest. Email records retain author and submission metadata for 30 days. Unsubscribe removes the stored email, cancels pending mail, and retains the GitHub user ID as a persistent opt-out so new submissions cannot resubscribe the author; a send already in progress may complete. Delivery-uncertain messages are not automatically resent.</p><p>For deletion requests, contact the maintainers through the source repository.</p></section>",
     );
   if (path === "/notifications/unsubscribe") {
     const token = url.searchParams.get("token") ?? "";
@@ -90,6 +90,9 @@ export async function ui(request: Request, env: Env): Promise<Response> {
       return new Response("Invalid link", { status: 400 });
     if (request.method === "POST") {
       await env.DB.batch([
+        env.DB.prepare(
+          "INSERT OR IGNORE INTO author_email_optouts(user_id,updated) SELECT user_id,? FROM author_subscriptions WHERE unsubscribe=?",
+        ).bind(Date.now(), token),
         env.DB.prepare(
           "UPDATE author_emails SET state='cancelled',updated=? WHERE state='pending' AND user_id IN (SELECT user_id FROM author_subscriptions WHERE unsubscribe=?)",
         ).bind(Date.now(), token),
@@ -115,7 +118,7 @@ export async function ui(request: Request, env: Env): Promise<Response> {
     const current = await session(request, env);
     if (!current)
       return html(
-        '<h1>Your ghfind score, in your inbox / 邮箱里的 ghfind 评分</h1><section><p>Subscribe to receive your score, interval and ranking among accounts indexed by ghfind when the bot processes your new issue or PR. At most one email per 24 hours. / 订阅后，bot 处理你的新 issue 或 PR 时会发送分数、区间与站内排名，每 24 小时最多一封。</p><p>GitHub authorization reads your verified primary email. Signing in alone does not subscribe you. / GitHub 授权用于读取已验证主邮箱，仅登录不会订阅。</p><a href="/login?return_to=notifications">Sign in with GitHub / 使用 GitHub 登录</a></section>',
+        '<h1>Your ghfind score, in your inbox / 邮箱里的 ghfind 评分</h1><section><p>Authors with a public GitHub profile email receive score notifications by default, until they unsubscribe. At most one per 24 hours. Sign in to use your verified email or manage preferences. / 有 GitHub 公开邮箱的作者默认收到评分通知，退订后停止，每 24 小时最多一封。登录可改用已验证邮箱或管理偏好。</p><p>GitHub authorization reads your verified primary email. Signing in alone does not subscribe you. / GitHub 授权用于读取已验证主邮箱，仅登录不会订阅。</p><a href="/login?return_to=notifications">Sign in with GitHub / 使用 GitHub 登录</a></section>',
       );
     const api = github(current.token);
     const user = record(await api("/user"));
@@ -140,19 +143,22 @@ export async function ui(request: Request, env: Env): Promise<Response> {
         return html(
           "<h1>No verified primary email / 无已验证主邮箱</h1><p>Verify your primary email in GitHub settings and try again. / 请在 GitHub 设置中验证主邮箱后重试。</p>",
         );
-      await env.DB.prepare(
-        `INSERT INTO author_subscriptions(user_id,login,email,locale,unsubscribe,updated) VALUES(?,?,?,?,?,?)
-        ON CONFLICT(user_id) DO UPDATE SET login=excluded.login,email=excluded.email,locale=excluded.locale,updated=excluded.updated`,
-      )
-        .bind(
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM author_email_optouts WHERE user_id=?").bind(
+          userId,
+        ),
+        env.DB.prepare(
+          `INSERT INTO author_subscriptions(user_id,login,email,locale,unsubscribe,updated) VALUES(?,?,?,?,?,?)
+        ON CONFLICT(user_id) DO UPDATE SET login=excluded.login,email=excluded.email,locale=excluded.locale,updated=excluded.updated,source='verified'`,
+        ).bind(
           userId,
           user.login,
           await seal(env, email),
           form.get("locale") === "zh" ? "zh" : "en",
           crypto.randomUUID(),
           Date.now(),
-        )
-        .run();
+        ),
+      ]);
       return redirect("/notifications");
     }
     if (request.method !== "GET")

@@ -149,7 +149,7 @@ export async function syncComment(
   const body =
     scoreComment(login, score) +
     (emailEnabled
-      ? "\n\n[Get your score and ghfind ranking by email / 订阅作者评分邮件](https://bot.ghfind.com/notifications) (optional / 自愿订阅)."
+      ? "\n\n[Email preferences / 邮件设置](https://bot.ghfind.com/notifications): score emails go to available public GitHub addresses by default; unsubscribe in the email. / 有公开邮箱时默认发送评分邮件，可在邮件中退订。"
       : "");
   const path = `/repos/${repository}/issues/${number}/comments`;
   // Check ownership as well as the marker: quoted/spoofed user comments are never edited.

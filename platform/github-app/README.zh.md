@@ -205,12 +205,9 @@ node scripts/e2e.mjs verify owner/test-repository app-slug issue-or-pr-number
 
 ## 作者评分邮件
 
-作者可进入[邮件设置](https://bot.ghfind.com/notifications)主动订阅，并选择中文或英文。
-**仅使用 GitHub 登录不会自动订阅**，必须明确勾选同意并保存。
-App 通过 **Email addresses: read** 用户权限读取本人已验证的主邮箱；仓库安装权限
-无法读取任意作者的私有绑定邮箱。不会抓取公开 profile 或 commit 邮箱替代，也不发送到 GitHub noreply 地址。
+作者当前 GitHub 主页有公开邮箱时，默认发送评分邮件，无需先登录或订阅。缺少邮箱、无效地址、bot 和 GitHub noreply 地址会跳过。不会从 commit 中提取邮箱，因为提交元数据不能证明邮箱归属。发信前再次核对公开邮箱。作者可通过[邮件设置](https://bot.ghfind.com/notifications)主动授权已验证主邮箱、选择中英文或在退订后重新开启；私有邮箱仍需作者本人授权。
 
-新 issue/PR 完成标签和评论后，订阅者可收到分数、区间、profile URL，以及可用时的
+新 issue/PR 完成标签和评论后，作者可收到分数、区间、profile URL，以及可用时的
 “超过 ghfind 已收录评分账号的比例”和站内评分排名。
 这些是**站内评分统计**，不代表该仓库的 PR 审查顺序，也不预测维护者多久回复；数据不可用时会明确说明。
 
@@ -220,12 +217,12 @@ App 通过 **Email addresses: read** 用户权限读取本人已验证的主邮�
 不自动重发，避免重复邮件；代价是这种故障下可能漏发，需运营者核实后处理。
 
 每封邮件附带退订链接及一键退订邮件头。打开链接先确认，提交后删除加密邮箱订阅并取消待发邮件；
-已经开始发送的邮件可能仍会送达。邮箱使用 `SESSION_SECRET` 加密保存，不记录收件地址或可能包含地址的服务商错误。
+退订保留 GitHub 用户 ID 作为长期停发记录，跨仓库生效，不随邮件事件过期删除；仅本人主动重新订阅才解除。已经开始发送的邮件可能仍会送达。邮箱使用 `SESSION_SECRET` 加密保存，不记录收件地址或可能包含地址的服务商错误。
 邮件事件记录保留 30 天。
 
 ### 运营者启用步骤
 
-1. 使用 Wrangler D1 migrations 应用 `0002_author_email.sql` 和 `0003_email_delivery_receipt.sql` 等待执行迁移。
+1. 使用 Wrangler D1 migrations 应用 `0002_author_email.sql` 和 `0003_email_delivery_receipt.sql`、`0004_default_author_email.sql` 等待执行迁移。
 2. 在 GitHub App 的 **Account permissions** 中增加 **Email addresses: read**。
    作者必须本人授权，仓库 owner 不能代其同意。
 3. 启用发信子域名，例如 `wrangler email sending enable mail.example.com`，验证 SPF、DKIM、DMARC，

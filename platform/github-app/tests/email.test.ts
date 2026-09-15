@@ -2,6 +2,8 @@ import { env } from "cloudflare:test";
 import { beforeAll, beforeEach, afterEach, expect, it, vi } from "vitest";
 import {
   authorEmail,
+  publicEmail,
+  discoverPublicRecipient,
   scoreContext,
   verifiedEmail,
   enqueueAuthorEmail,
@@ -27,6 +29,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await e.DB.batch(
     [
+      "author_email_optouts",
       "author_emails",
       "author_subscriptions",
       "email_daily_budget",
@@ -267,4 +270,100 @@ it("stops sending when disabled, the global budget is exhausted, or access is re
   );
   await sendAuthorEmails(enabled);
   expect(send).not.toHaveBeenCalled();
+});
+
+it("discovers a public profile address without opt-in and persists opt-out across new subjects", async () => {
+  const enabled = { ...e, EMAIL_ENABLED: "true" };
+  const api = vi
+    .fn()
+    .mockResolvedValue({
+      id: 1,
+      type: "User",
+      email: "controlled@example.com",
+    });
+  await enqueueAuthorEmail(enabled, 1, payload, 2, api);
+  expect(
+    await e.DB.prepare("SELECT source FROM author_subscriptions").first(
+      "source",
+    ),
+  ).toBe("public");
+  expect(
+    await e.DB.prepare("SELECT count(*) n FROM author_emails").first("n"),
+  ).toBe(1);
+  const token = await e.DB.prepare(
+    "SELECT unsubscribe FROM author_subscriptions",
+  ).first("unsubscribe");
+  await ui(
+    new Request(
+      `https://bot.ghfind.com/notifications/unsubscribe?token=${token}`,
+      { method: "POST" },
+    ),
+    enabled,
+  );
+  await enqueueAuthorEmail(enabled, 1, { ...payload, number: 2 }, 2, api);
+  expect(
+    await e.DB.prepare("SELECT count(*) n FROM author_subscriptions").first(
+      "n",
+    ),
+  ).toBe(0);
+  expect(
+    await e.DB.prepare("SELECT count(*) n FROM author_emails").first("n"),
+  ).toBe(1);
+  expect(api).toHaveBeenCalledTimes(1);
+});
+it("rejects mismatched identity, bots, missing and noreply public emails", async () => {
+  for (const value of [
+    { id: 2, type: "User", email: "a@example.com" },
+    { id: 1, type: "Bot", email: "a@example.com" },
+    { id: 1, type: "User", email: null },
+    { id: 1, type: "User", email: "a@users.noreply.github.com" },
+  ])
+    expect(publicEmail(value, 1)).toBeNull();
+  const api = vi.fn().mockRejectedValue(new Error("unavailable"));
+  await discoverPublicRecipient(e, 1, "octocat", api);
+  expect(
+    await e.DB.prepare("SELECT count(*) n FROM author_subscriptions").first(
+      "n",
+    ),
+  ).toBe(0);
+});
+it("does not send when a previously public email is hidden or replaced", async () => {
+  const send = vi.fn();
+  const enabled = { ...e, EMAIL_ENABLED: "true", EMAIL: { send } as SendEmail };
+  await enqueueAuthorEmail(
+    enabled,
+    1,
+    payload,
+    2,
+    vi
+      .fn()
+      .mockResolvedValue({
+        id: 1,
+        type: "User",
+        email: "controlled@example.com",
+      }),
+  );
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
+    String(input).includes("/users/")
+      ? Response.json({ id: 1, type: "User", email: null })
+      : Response.json({ token: "test" }),
+  );
+  await sendAuthorEmails(enabled);
+  expect(send).not.toHaveBeenCalled();
+  expect(
+    await e.DB.prepare("SELECT state FROM author_emails").first("state"),
+  ).toBe("cancelled");
+});
+it("a concurrent opt-out during public lookup prevents automatic enrollment", async () => {
+  await discoverPublicRecipient(e, 1, "octocat", async () => {
+    await e.DB.prepare("INSERT INTO author_email_optouts VALUES(1,?)")
+      .bind(Date.now())
+      .run();
+    return { id: 1, type: "User", email: "controlled@example.com" };
+  });
+  expect(
+    await e.DB.prepare("SELECT count(*) n FROM author_subscriptions").first(
+      "n",
+    ),
+  ).toBe(0);
 });
