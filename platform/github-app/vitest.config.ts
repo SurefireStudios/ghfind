@@ -37,6 +37,7 @@ export default defineConfig({
           "0001_jobs.sql",
           "0002_author_email.sql",
           "0003_email_delivery_receipt.sql",
+          "0004_default_author_email.sql",
         ]
           .map((f) => readFileSync(`migrations/${f}`, "utf8"))
           .join("\n"),

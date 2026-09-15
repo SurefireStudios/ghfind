@@ -309,14 +309,9 @@ Owner-customized colors or descriptions remain unchanged.
 
 ## Author emails
 
-Authors can opt in at [Email preferences](https://bot.ghfind.com/notifications).
-GitHub sign-in alone does not subscribe them: they explicitly save consent and choose
-English or Chinese. The App reads the authenticated author's **verified primary email**
-with the GitHub App user permission **Email addresses: read**. Repository installation
-access cannot reveal an arbitrary author's private email. Public profile/commit emails
-and GitHub noreply addresses are not used as substitutes.
+Authors with a current public GitHub profile email receive score emails by default, without signing in or subscribing first. Missing, invalid, bot and GitHub noreply addresses are skipped. Commit emails are not used because commit metadata does not prove mailbox ownership. The public email is rechecked before delivery. [Email preferences](https://bot.ghfind.com/notifications) also lets authors explicitly authorize a verified primary email, choose English/Chinese, or resume after opting out. Private email access still requires the author's GitHub user authorization.
 
-After a new issue/PR is labeled and commented, a subscriber can receive their score,
+After a new issue/PR is labeled and commented, the author can receive their score,
 interval, profile URL, and—when available—their percentile and score rank among accounts
 indexed by ghfind. These are **site score statistics**, not the repository's PR review
 order or a prediction of when maintainers will respond. Missing statistics are omitted.
@@ -329,13 +324,13 @@ notifications. Inspect these records before any manual recovery.
 
 Every email contains an unsubscribe link and one-click unsubscribe headers. Visiting the
 link asks for confirmation; submitting it removes the encrypted email subscription and
-cancels pending mail. A send already in progress may complete. Subscription email addresses
+cancels pending mail. A persistent GitHub user-ID opt-out prevents reenrollment across repositories, even after event records expire. Only explicit author resubscription clears it. A send already in progress may complete. Subscription email addresses
 are encrypted using `SESSION_SECRET`; providers' errors and recipient addresses are not
 logged. Email event records are retained for 30 days.
 
 ### Operator setup
 
-1. Apply all pending Wrangler D1 migrations, including `0002_author_email.sql` and `0003_email_delivery_receipt.sql`.
+1. Apply all pending Wrangler D1 migrations, including `0002_author_email.sql` and `0003_email_delivery_receipt.sql`, and `0004_default_author_email.sql`.
 2. Add **Email addresses: read** under the App's **Account permissions**. Authors must
    authorize that permission themselves; repository owners cannot consent for them.
 3. Onboard a sending subdomain, for example `wrangler email sending enable mail.example.com`,
