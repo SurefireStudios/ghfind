@@ -25,6 +25,53 @@ interface FloatingCommentBubble {
   duration: string;
 }
 
+/**
+ * Height of the sticky site header, in pixels.
+ *
+ * The mobile danmaku strip is `fixed`, so it needs to start below the header
+ * rather than at the top of the viewport. It used a hard-coded `top-16`, which
+ * is the height of the navbar row alone — but `.site-navbar` also contains the
+ * sponsor strip above that row, and the sponsor link wraps at narrow widths.
+ * On a 375px viewport the header measures ~107px against that assumed 64px, so
+ * the first comments were drawn underneath it and clipped.
+ *
+ * Measured rather than derived from a second constant, because the height
+ * moves with the sponsor strip's presence, the locale's text length, and the
+ * viewport width. Starts at the old value so the server and the first client
+ * render agree, then corrects on mount.
+ */
+const FALLBACK_HEADER_OFFSET = 64;
+
+function useSiteHeaderOffset(): number {
+  const [offset, setOffset] = useState(FALLBACK_HEADER_OFFSET);
+
+  useEffect(() => {
+    const header = document.querySelector(".site-navbar");
+    if (!header) return;
+
+    const measure = () => {
+      const { height } = header.getBoundingClientRect();
+      // Ceil, not round: the header is a fractional height at most zoom levels
+      // and device pixel ratios (107.33px on a 375px viewport), and rounding
+      // down leaves the strip a sub-pixel sliver underneath it.
+      if (height > 0) setOffset(Math.ceil(height));
+    };
+
+    measure();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measure);
+      return () => window.removeEventListener("resize", measure);
+    }
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
+
+  return offset;
+}
+
 type CommentBubbleLang = "zh" | "en";
 
 interface CommentBubbleLabels {
@@ -228,6 +275,7 @@ export function CommentBubbles({
   const [comments, setComments] = useState<CommentBubbleItem[]>(initialComments);
   const [sending, setSending] = useState(false);
   const [showMobileDanmaku, setShowMobileDanmaku] = useState(true);
+  const headerOffset = useSiteHeaderOffset();
   const [submitError, setSubmitError] = useState<"auth" | "send" | null>(null);
 
   useEffect(() => {
@@ -305,7 +353,10 @@ export function CommentBubbles({
       </div>
 
       {showMobileDanmaku && (
-        <div className="pointer-events-none fixed inset-x-0 top-16 z-20 h-72 overflow-hidden xl:hidden">
+        <div
+          className="pointer-events-none fixed inset-x-0 z-20 h-72 overflow-hidden xl:hidden"
+          style={{ top: headerOffset }}
+        >
           {bubbles.map((bubble, index) => (
             <div
               key={`mobile-${bubble.side}-${index}-${bubble.text}`}
