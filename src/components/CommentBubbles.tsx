@@ -28,17 +28,9 @@ interface FloatingCommentBubble {
 /**
  * Height of the sticky site header, in pixels.
  *
- * The mobile danmaku strip is `fixed`, so it needs to start below the header
- * rather than at the top of the viewport. It used a hard-coded `top-16`, which
- * is the height of the navbar row alone — but `.site-navbar` also contains the
- * sponsor strip above that row, and the sponsor link wraps at narrow widths.
- * On a 375px viewport the header measures ~107px against that assumed 64px, so
- * the first comments were drawn underneath it and clipped.
- *
- * Measured rather than derived from a second constant, because the height
- * moves with the sponsor strip's presence, the locale's text length, and the
- * viewport width. Starts at the old value so the server and the first client
- * render agree, then corrects on mount.
+ * Measured rather than a constant: `.site-navbar` includes the sponsor strip,
+ * which wraps at narrow widths, so the height moves with locale and viewport.
+ * Starts at the fallback so server and first client render agree.
  */
 const FALLBACK_HEADER_OFFSET = 64;
 
@@ -51,9 +43,7 @@ function useSiteHeaderOffset(): number {
 
     const measure = () => {
       const { height } = header.getBoundingClientRect();
-      // Ceil, not round: the header is a fractional height at most zoom levels
-      // and device pixel ratios (107.33px on a 375px viewport), and rounding
-      // down leaves the strip a sub-pixel sliver underneath it.
+      // Ceil: a fractional header height would leave a sub-pixel sliver.
       if (height > 0) setOffset(Math.ceil(height));
     };
 
